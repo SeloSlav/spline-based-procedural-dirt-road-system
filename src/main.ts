@@ -38,6 +38,7 @@ class RoadNetworkEditorApp {
   private readonly root: HTMLElement;
   private readonly viewport: HTMLElement;
   private readonly zoomLabel: HTMLElement;
+  private readonly fpsLabel: HTMLElement;
   private readonly buildButton: HTMLButtonElement;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2_600);
@@ -100,6 +101,7 @@ class RoadNetworkEditorApp {
     this.root.innerHTML = pageTemplate();
     this.viewport = this.mustFind<HTMLElement>('[data-viewport]');
     this.zoomLabel = this.mustFind<HTMLElement>('[data-zoom]');
+    this.fpsLabel = this.mustFind<HTMLElement>('[data-fps]');
     this.buildButton = this.mustFind<HTMLButtonElement>('[data-build]');
     this.viewport.prepend(this.renderer.domElement);
     this.renderer.domElement.setAttribute('aria-label', 'Interactive three-dimensional road building map');
@@ -506,7 +508,9 @@ class RoadNetworkEditorApp {
     const info = this.renderer.info as typeof this.renderer.info & {
       render?: { calls?: number; triangles?: number; points?: number; lines?: number };
     };
-    document.documentElement.dataset.frameFps = (this.frameSamples.length / total).toFixed(1);
+    const fps = (this.frameSamples.length / total).toFixed(1);
+    document.documentElement.dataset.frameFps = fps;
+    this.fpsLabel.textContent = fps;
     document.documentElement.dataset.frameP95Ms = (sorted[p95Index]! * 1_000).toFixed(2);
     document.documentElement.dataset.cpuMs = (
       this.cpuSamples.reduce((sum, sample) => sum + sample, 0) / this.cpuSamples.length
@@ -654,6 +658,7 @@ function pageTemplate(): string {
         </div>
 
         <div class="view-panel panel" aria-label="View information">
+          <div class="fps-stat"><span>FPS</span><strong data-fps aria-live="off">--</strong></div>
           <div><span>ZOOM</span><strong data-zoom>100%</strong></div>
           <div><span>LIGHT</span><strong>DAY</strong></div>
           <div><span>SEED</span><strong>${WORLD_SEED.toString(16).padStart(8, '0').toUpperCase()}</strong></div>

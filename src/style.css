@@ -398,7 +398,7 @@ kbd {
 }
 
 @media (max-width: 800px) {
-  .view-panel div:nth-child(n+2), .client-badge, .stats-panel { display: none; }
+  .view-panel div:not(.fps-stat), .client-badge, .stats-panel { display: none; }
   .brand-panel { min-width: 0; }
   h1 { font-size: 17px; }
   .controls-panel { bottom: 88px; width: 175px; }
@@ -413,7 +413,7 @@ kbd {
 @media (max-width: 560px) {
   .topbar { top: 10px; left: 10px; right: 10px; }
   .brand-panel { flex: 1; }
-  .view-panel { display: none; }
+  .view-panel { display: flex; }
   .controls-panel { display: none; }
   .status-message { min-width: min(290px, calc(100vw - 24px)); }
   .tool-dock { bottom: 12px; height: 61px; padding: 5px; }
