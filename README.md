@@ -1,17 +1,18 @@
-# Kupa Roadworks
+# Procedural Dirt Road System
 
-A fully client-side extraction of the road-building experience from
-`medieval-road-system`. It opens directly on one fixed small Kupa Valley map—no
-login, world setup, server, or save backend.
+A terrain-aware spline road editor with automatic river crossings. Draw curved
+dirt roads, snap routes into a connected network, and generate timber bridge
+structures where roads cross water.
 
-## Included
+## Features
 
-- The medieval project’s RTS camera tuning and 30–1000% zoom range
-- Fixed Kupa Valley terrain recipe, river layout, meadow grass, woodland, and stones
-- Textured spline dirt roads with snapping and road-network intersections
-- Automatic timber decks, supports, and railings wherever a valid road crosses the river
-- The original construction hammer artwork and road-placement sound
-- Undo, redo, clear, and device-local runtime state only
+- Procedural valley terrain with a river, meadow grass, woodland, and stone ground cover
+- Textured spline roads that conform to the terrain
+- Endpoint, segment, and intersection snapping for connected road networks
+- Automatic timber decks, supports, and railings at valid river crossings
+- Adjustable spline curvature while placing a route
+- Undo, redo, and clear controls
+- RTS-style camera movement with rotation and a 30–1000% zoom range
 
 ## Controls
 
@@ -30,4 +31,4 @@ npm install
 npm run dev
 ```
 
-The production build is a static client bundle created with `npm run build`.
+Create a production build with `npm run build`.

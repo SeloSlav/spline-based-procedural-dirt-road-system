@@ -7,7 +7,7 @@ import { FixedMap } from './terrain/FixedMap.ts';
 import { MapDecor } from './world/MapDecor.ts';
 import './style.css';
 
-class KupaRoadworksApp {
+class RoadNetworkEditorApp {
   private readonly root: HTMLElement;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(54, 1, 0.1, 2_600);
@@ -159,12 +159,12 @@ function pageTemplate(): string {
     <section class="viewport" data-viewport>
       <header class="topbar">
         <div class="brand-panel panel">
-          <div class="brand-mark" aria-hidden="true">KR</div>
+          <div class="brand-mark" aria-hidden="true">DR</div>
           <div>
-            <div class="eyebrow">KUPA ROADWORKS · FIXED MAP</div>
+            <div class="eyebrow">PROCEDURAL ROAD NETWORK</div>
             <h1>Road &amp; Bridge Editor</h1>
           </div>
-          <span class="client-badge">CLIENT-SIDE</span>
+          <span class="client-badge">SPLINE EDITOR</span>
         </div>
 
         <div class="view-panel panel" aria-label="View information">
@@ -221,4 +221,4 @@ function pageTemplate(): string {
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Missing #app root');
-new KupaRoadworksApp(root);
+new RoadNetworkEditorApp(root);
