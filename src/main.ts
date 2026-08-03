@@ -1,30 +1,94 @@
 import * as THREE from 'three';
+import type { WebGPURenderer } from 'three/webgpu';
 import { CameraController } from './camera/CameraController.ts';
+import { createGrassBladeField, type GrassBladeField } from './grass/GrassBladeField.ts';
+import { updateTerrainZoomBlend } from './grass/GrassLodConfig.ts';
+import { computeForestTreePlacements, type ForestTreePlacement } from './props/forestPlacements.ts';
 import { RoadEditor, type RoadEditorState } from './roads/RoadEditor.ts';
+import type { RoadEdge } from './roads/RoadEdge.ts';
+import { RoadMaterialFactory } from './roads/RoadMaterialFactory.ts';
 import { RoadNetwork } from './roads/RoadNetwork.ts';
 import { RoadRenderer } from './roads/RoadRenderer.ts';
-import { FixedMap } from './terrain/FixedMap.ts';
-import { MapDecor } from './world/MapDecor.ts';
+import { ResidenceSystem } from './residences/ResidenceSystem.ts';
+import { ResidenceTool, type ResidenceToolState } from './residences/ResidenceTool.ts';
+import { createRiverBankMeshes } from './rivers/RiverBankMesh.ts';
+import { RiverField } from './rivers/RiverField.ts';
+import { createRiverReeds, type RiverReedField } from './rivers/RiverReeds.ts';
+import { createRiverShoreStones } from './rivers/RiverShoreStones.ts';
+import { createRiverWaterMesh, type RiverWaterController } from './rivers/RiverWaterMesh.ts';
+import { createPreferredRenderer, type RendererBackend, type SupportedRenderer } from './scene/RendererBackend.ts';
+import { setWorldAnimationTime } from './scene/worldAnimationTime.ts';
+import { FixedMap, WORLD_SEED } from './terrain/FixedMap.ts';
+import type { Terrain } from './terrain/Terrain.ts';
+import { distancePointToPolylineXZ } from './utils/pathGeometry.ts';
+import { isPointInPolygon2 } from './utils/polygonGeometry.ts';
+import { loadMossyRockTextures } from './utils/propTextureLoad.ts';
+import {
+  createSeedThreeForest,
+  createSeedThreeForestController,
+  type SeedThreeForestInstances,
+} from './vegetation/seedthree/seedThreeForestBuilder.ts';
+import type { SeedThreeForestController } from './vegetation/seedthree/seedThreeForestTypes.ts';
 import './style.css';
+
+const TREE_SEED = 0x5eedf0a5;
+const ROAD_CLEAR_MARGIN = 1.35;
 
 class RoadNetworkEditorApp {
   private readonly root: HTMLElement;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(54, 1, 0.1, 2_600);
-  private readonly renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2_600);
+  private readonly renderer: SupportedRenderer;
+  private readonly rendererBackend: RendererBackend;
   private readonly map = new FixedMap();
   private readonly network = new RoadNetwork();
-  private readonly roadRenderer = new RoadRenderer(this.network, this.map);
-  private readonly decor = new MapDecor(this.map);
+  private readonly roadRenderer: RoadRenderer;
   private readonly clock = new THREE.Clock();
   private readonly cameraTarget = new THREE.Vector3();
   private readonly roadEditor: RoadEditor;
+  private readonly residenceSystem: ResidenceSystem;
+  private readonly residenceTool: ResidenceTool;
+  private readonly interactionOverlay = new THREE.Group();
   private readonly cameraController: CameraController;
+  private readonly terrainSurface: Terrain;
+  private readonly riverField: RiverField;
+  private readonly riverGroup = new THREE.Group();
+  private readonly riverWater: RiverWaterController | null;
+  private riverReeds: RiverReedField | null = null;
+  private forest: SeedThreeForestInstances | null = null;
+  private forestController: SeedThreeForestController | null = null;
+  private forestPlacements: ForestTreePlacement[] = [];
+  private grass: GrassBladeField | null = null;
   private lastTopologyRevision = -1;
-  private ambientAudio: HTMLAudioElement | null = null;
+  private roadState: RoadEditorState = {
+    enabled: true,
+    hasDraft: false,
+    canBuild: false,
+    anchors: 0,
+    roadCount: 0,
+    bridgeCount: 0,
+    previewBridges: 0,
+    curveOffset: 0,
+    message: 'Click the terrain to begin a road',
+  };
+  private residenceState: ResidenceToolState = {
+    enabled: false,
+    hasDraft: false,
+    canBuild: false,
+    stage: 0,
+    plotCount: 1,
+    residenceCount: 0,
+    message: 'Click beside a road to start the residence frontage',
+  };
 
-  constructor(root: HTMLElement) {
+  constructor(
+    root: HTMLElement,
+    rendererBackend: RendererBackend,
+    materials: RoadMaterialFactory,
+  ) {
     this.root = root;
+    this.rendererBackend = rendererBackend;
+    this.renderer = rendererBackend.renderer;
     this.root.innerHTML = pageTemplate();
     const viewport = this.mustFind<HTMLElement>('[data-viewport]');
     viewport.prepend(this.renderer.domElement);
@@ -32,15 +96,57 @@ class RoadNetworkEditorApp {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.06;
+    this.renderer.toneMappingExposure = 1.04;
 
-    this.scene.background = new THREE.Color(0xb8c6ad);
-    this.scene.fog = new THREE.FogExp2(0xb8c6ad, 0.00135);
+    this.scene.background = new THREE.Color(0x78929d);
+    this.scene.fog = new THREE.FogExp2(0x879da3, 0.00072);
     this.addLighting();
-    const terrain = this.map.createTerrainMesh();
-    this.scene.add(terrain, this.decor.group, this.roadRenderer.group, this.roadRenderer.previewGroup);
+    this.riverField = RiverField.fromLayout({
+      bounds: this.map.bounds,
+      layout: this.map.riverLayout,
+    });
+    const terrain = this.map.createTerrainMesh(
+      materials.createTerrainMaterialWithRiverShore(),
+      this.riverField,
+    );
+    this.terrainSurface = {
+      playableSize: 620,
+      size: 817,
+      mesh: terrain,
+      getHeightAt: (x, z) => this.map.getHeightAt(x, z),
+      getPointAt: (x, z, offset = 0) => this.map.getPointAt(x, z, offset),
+      getPointAtInto: (x, z, target, offset = 0) => target.set(
+        x,
+        this.map.getHeightAt(x, z) + offset,
+        z,
+      ),
+      setDirtZoomGate: (value) => {
+        const attribute = terrain.geometry.getAttribute('dirtZoomGate');
+        (attribute.array as Float32Array).fill(value);
+        attribute.needsUpdate = true;
+      },
+    };
+    this.roadRenderer = new RoadRenderer(
+      this.network,
+      this.terrainSurface,
+      this.riverField,
+      materials,
+    );
+    this.riverGroup.name = 'River system';
+    this.riverWater = createRiverWaterMesh(this.riverGroup, this.terrainSurface, this.riverField);
+    this.riverGroup.add(
+      createRiverBankMeshes(this.terrainSurface, this.riverField, materials.riverBank),
+    );
+    this.residenceSystem = new ResidenceSystem(this.map);
+    this.interactionOverlay.name = 'Placement interaction overlays';
+    this.scene.add(
+      terrain,
+      this.riverGroup,
+      this.roadRenderer.group,
+      this.roadRenderer.previewGroup,
+      this.residenceSystem.group,
+      this.interactionOverlay,
+    );
 
     this.roadEditor = new RoadEditor({
       domElement: this.renderer.domElement,
@@ -49,7 +155,26 @@ class RoadNetworkEditorApp {
       map: this.map,
       network: this.network,
       renderer: this.roadRenderer,
+      connectionParent: this.interactionOverlay,
+      getBuildings: () => this.residenceSystem.getRoadConnectionSources(),
       onStateChanged: (state) => this.renderEditorState(state),
+      onToggleRequested: () => this.toggleTool('road'),
+    });
+
+    this.residenceTool = new ResidenceTool({
+      domElement: this.renderer.domElement,
+      camera: this.camera,
+      terrainMesh: terrain,
+      map: this.map,
+      network: this.network,
+      system: this.residenceSystem,
+      previewParent: this.interactionOverlay,
+      onStateChanged: (state) => this.renderResidenceState(state),
+      onPlaced: () => {
+        this.syncSourceEnvironmentRoadClearance();
+        this.requestShadowRefresh();
+      },
+      onToggleRequested: () => this.toggleTool('residence'),
     });
 
     this.cameraController = new CameraController({
@@ -58,8 +183,11 @@ class RoadNetworkEditorApp {
       domElement: this.renderer.domElement,
       bounds: this.map.bounds,
       getHeightAt: (x, z) => this.map.getHeightAt(x, z),
-      getCursorOverride: () => this.roadEditor.getCursor(),
-      shouldIgnoreInput: (event) => this.roadEditor.shouldIgnoreCameraInput(event),
+      getCursorOverride: () => this.residenceTool.getCursor() ?? this.roadEditor.getCursor(),
+      shouldIgnoreInput: (event) => (
+        this.residenceTool.shouldIgnoreCameraInput(event)
+        || this.roadEditor.shouldIgnoreCameraInput(event)
+      ),
       continuousRenderLoop: true,
     });
     this.cameraController.applyShowcaseView(0, -30, THREE.MathUtils.degToRad(-58), THREE.MathUtils.degToRad(54), 285);
@@ -67,60 +195,215 @@ class RoadNetworkEditorApp {
     this.bindUi();
     this.onResize();
     window.addEventListener('resize', this.onResize);
-    window.addEventListener('pointerdown', this.startAmbientAudio, { once: true });
     this.animate();
+    void this.loadSourceEnvironment();
   }
 
   private addLighting(): void {
-    const hemisphere = new THREE.HemisphereLight(0xe8f0de, 0x5b513e, 2.15);
-    const sun = new THREE.DirectionalLight(0xfff0ce, 3.35);
-    sun.position.set(-190, 310, -120);
+    const hemisphere = new THREE.HemisphereLight(0xd9e8ec, 0x59634f, 1.55);
+    const ambient = new THREE.AmbientLight(0xb8c8d2, 0.18);
+    const sun = new THREE.DirectionalLight(0xffefd2, 5.2);
+    sun.name = 'Sun';
+    sun.position.set(-127.28, 131.63, -127.28);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -290;
-    sun.shadow.camera.right = 290;
-    sun.shadow.camera.top = 290;
-    sun.shadow.camera.bottom = -290;
-    sun.shadow.camera.near = 40;
-    sun.shadow.camera.far = 760;
-    sun.shadow.bias = -0.00016;
-    const fill = new THREE.DirectionalLight(0x9fb4c4, 0.45);
-    fill.position.set(180, 120, 240);
-    this.scene.add(hemisphere, sun, fill);
+    sun.shadow.camera.left = -440;
+    sun.shadow.camera.right = 440;
+    sun.shadow.camera.top = 440;
+    sun.shadow.camera.bottom = -440;
+    sun.shadow.camera.near = 1;
+    sun.shadow.camera.far = 900;
+    sun.shadow.bias = -0.00008;
+    sun.shadow.normalBias = 0.008;
+    sun.shadow.radius = 1.8;
+    const fill = new THREE.DirectionalLight(0xa8c6d8, 0.34);
+    fill.name = 'Sky fill';
+    fill.position.set(63.64, -0.82, 63.64);
+    this.scene.add(hemisphere, ambient, sun, fill);
+  }
+
+  private async loadSourceEnvironment(): Promise<void> {
+    document.documentElement.dataset.environmentReady = 'loading';
+    try {
+      this.forestPlacements = computeForestTreePlacements(
+        this.terrainSurface.playableSize,
+        this.terrainSurface.size,
+        (x, z) => this.riverField.isBlockedForProps(x, z),
+        { treeSeed: TREE_SEED, densityScale: 1 },
+      );
+      const [forest, grass, reeds, rockTextures] = await Promise.all([
+        createSeedThreeForest(
+          this.forestPlacements,
+          this.terrainSurface,
+          this.rendererBackend.maxAnisotropy,
+          TREE_SEED,
+          this.renderer as WebGPURenderer,
+        ),
+        createGrassBladeField(this.terrainSurface, {
+          isBlockedAt: (x, z) => this.riverField.isGrassBlockedAt(x, z),
+          maxAnisotropy: this.rendererBackend.maxAnisotropy,
+          rendererBackend: this.rendererBackend.kind,
+          lodFadeMode: 'continuous-alpha-hash',
+        }),
+        createRiverReeds(
+          this.terrainSurface,
+          this.riverField,
+          mulberry32(0x8eed1212),
+          this.rendererBackend.maxAnisotropy,
+          this.rendererBackend.kind,
+        ),
+        loadMossyRockTextures(this.rendererBackend.maxAnisotropy),
+      ]);
+      this.forest = forest;
+      this.forestController = createSeedThreeForestController(forest);
+      this.forestController.setShadows(true);
+      this.grass = grass;
+      this.riverReeds = reeds;
+      const rockMaterial = createRiverRockMaterial(rockTextures);
+      const shoreStones = createRiverShoreStones(
+        this.terrainSurface,
+        this.riverField,
+        rockMaterial,
+        createPropShadowMaterials(),
+        mulberry32(0x71ee1212),
+      );
+      this.riverGroup.add(reeds.group, shoreStones.group);
+      this.scene.add(forest.group, grass.group);
+      this.syncSourceEnvironmentRoadClearance();
+      this.requestShadowRefresh();
+      document.documentElement.dataset.environmentReady = 'true';
+    } catch (error) {
+      document.documentElement.dataset.environmentReady = 'error';
+      console.error('Failed to initialize the source environment.', error);
+    }
+  }
+
+  private syncSourceEnvironmentRoadClearance(): void {
+    const edges = [...this.network.edges.values()];
+    const residencePolygons = this.residenceSystem.getClearancePolygons();
+    if (this.forestController) {
+      for (let index = 0; index < this.forestPlacements.length; index++) {
+        const placement = this.forestPlacements[index];
+        const insideResidenceFrontage = residencePolygons.some((polygon) => (
+          isPointInPolygon2({ x: placement.x, z: placement.z }, polygon)
+        ));
+        if (insideResidenceFrontage || this.isTreeNearAnyEdge(placement, edges)) this.forestController.hideTree(index);
+        else this.forestController.showTree(index);
+      }
+      this.forestController.commit();
+    }
+    this.grass?.syncRoadClearance(this.network);
+    this.grass?.syncPlacementClearance(residencePolygons);
+    this.requestShadowRefresh();
+  }
+
+  private isTreeNearAnyEdge(placement: ForestTreePlacement, edges: RoadEdge[]): boolean {
+    for (const edge of edges) {
+      const path = edge.sampledPath.length >= 2 ? edge.sampledPath : edge.controlPoints;
+      if (path.length < 2) continue;
+      const distance = distancePointToPolylineXZ(placement.x, placement.z, path);
+      if (distance <= treeClearRadius(placement, edge.width)) return true;
+    }
+    return false;
+  }
+
+  private requestShadowRefresh(): void {
+    const shadowMap = this.renderer.shadowMap as typeof this.renderer.shadowMap & { needsUpdate?: boolean };
+    if ('needsUpdate' in shadowMap) shadowMap.needsUpdate = true;
   }
 
   private bindUi(): void {
-    this.mustFind<HTMLButtonElement>('[data-tool-road]').addEventListener('click', () => this.roadEditor.toggle());
-    this.mustFind<HTMLButtonElement>('[data-build]').addEventListener('click', () => this.roadEditor.commit());
-    this.mustFind<HTMLButtonElement>('[data-undo]').addEventListener('click', () => this.roadEditor.undo());
-    this.mustFind<HTMLButtonElement>('[data-redo]').addEventListener('click', () => this.roadEditor.redo());
-    this.mustFind<HTMLButtonElement>('[data-clear]').addEventListener('click', () => this.roadEditor.clearAll());
+    this.mustFind<HTMLButtonElement>('[data-tool-road]').addEventListener('click', () => this.toggleTool('road'));
+    this.mustFind<HTMLButtonElement>('[data-tool-residence]').addEventListener('click', () => this.toggleTool('residence'));
+    this.mustFind<HTMLButtonElement>('[data-build]').addEventListener('click', () => {
+      if (this.residenceTool.isEnabled()) this.residenceTool.commit();
+      else this.roadEditor.commit();
+    });
+    this.mustFind<HTMLButtonElement>('[data-undo]').addEventListener('click', () => {
+      if (this.residenceTool.isEnabled()) this.residenceTool.undo();
+      else this.roadEditor.undo();
+    });
+    this.mustFind<HTMLButtonElement>('[data-redo]').addEventListener('click', () => {
+      if (this.residenceTool.isEnabled()) this.residenceTool.redo();
+      else this.roadEditor.redo();
+    });
+    this.mustFind<HTMLButtonElement>('[data-clear]').addEventListener('click', () => {
+      this.roadEditor.clearAll();
+      this.residenceTool.clearAll();
+    });
   }
 
   private renderEditorState(state: RoadEditorState): void {
-    const tool = this.mustFind<HTMLButtonElement>('[data-tool-road]');
-    tool.classList.toggle('is-active', state.enabled);
-    tool.setAttribute('aria-pressed', String(state.enabled));
-    this.mustFind<HTMLElement>('[data-mode]').textContent = state.enabled ? 'ROAD TOOL ACTIVE' : 'NAVIGATION MODE';
-    this.mustFind<HTMLElement>('[data-status]').textContent = state.message;
-    this.mustFind<HTMLElement>('[data-road-count]').textContent = String(state.roadCount);
-    this.mustFind<HTMLElement>('[data-bridge-count]').textContent = String(state.bridgeCount);
-    this.mustFind<HTMLElement>('[data-anchor-count]').textContent = String(state.anchors);
-    const bridgeHint = this.mustFind<HTMLElement>('[data-bridge-hint]');
-    bridgeHint.classList.toggle('is-visible', state.previewBridges > 0);
-    bridgeHint.textContent = state.previewBridges > 0
-      ? `${state.previewBridges} automatic timber bridge${state.previewBridges === 1 ? '' : 's'} in this route`
-      : 'Cross the river to generate a bridge';
-    const build = this.mustFind<HTMLButtonElement>('[data-build]');
-    build.disabled = !state.canBuild;
-    build.classList.toggle('is-ready', state.canBuild);
-    build.querySelector('span')!.textContent = state.previewBridges > 0 ? 'Build road + bridge' : 'Build road';
+    this.roadState = state;
+    this.renderToolState();
 
     const revision = this.network.getTopologyRevision();
     if (revision !== this.lastTopologyRevision) {
       this.lastTopologyRevision = revision;
-      this.decor.updateRoadClearance(this.network.edges.values());
+      this.syncSourceEnvironmentRoadClearance();
     }
+  }
+
+  private renderResidenceState(state: ResidenceToolState): void {
+    this.residenceState = state;
+    this.renderToolState();
+  }
+
+  private renderToolState(): void {
+    const roadActive = this.roadState.enabled;
+    const residenceActive = this.residenceState.enabled;
+    const roadTool = this.mustFind<HTMLButtonElement>('[data-tool-road]');
+    const residenceTool = this.mustFind<HTMLButtonElement>('[data-tool-residence]');
+    roadTool.classList.toggle('is-active', roadActive);
+    residenceTool.classList.toggle('is-active', residenceActive);
+    roadTool.setAttribute('aria-pressed', String(roadActive));
+    residenceTool.setAttribute('aria-pressed', String(residenceActive));
+    const activeState = residenceActive ? this.residenceState : this.roadState;
+    this.mustFind<HTMLElement>('[data-mode]').textContent = residenceActive
+      ? 'HOUSE PLACEMENT ACTIVE'
+      : roadActive
+        ? 'ROAD TOOL ACTIVE'
+        : 'NAVIGATION MODE';
+    this.mustFind<HTMLElement>('[data-status]').textContent = activeState.message;
+    this.mustFind<HTMLElement>('[data-road-count]').textContent = String(this.roadState.roadCount);
+    this.mustFind<HTMLElement>('[data-bridge-count]').textContent = String(this.roadState.bridgeCount);
+    this.mustFind<HTMLElement>('[data-residence-count]').textContent = String(this.residenceSystem.getResidenceCount());
+    this.mustFind<HTMLElement>('[data-frontage-count]').textContent = String(this.residenceSystem.getZoneCount());
+    this.mustFind<HTMLElement>('[data-anchor-count]').textContent = residenceActive
+      ? String(this.residenceState.stage < 4 ? this.residenceState.stage : 4)
+      : String(this.roadState.anchors);
+    const bridgeHint = this.mustFind<HTMLElement>('[data-bridge-hint]');
+    bridgeHint.classList.toggle('is-visible', !residenceActive && this.roadState.previewBridges > 0);
+    bridgeHint.classList.toggle('is-residence', residenceActive);
+    bridgeHint.textContent = residenceActive
+      ? 'Frontage snaps beside roads · cottages appear instantly'
+      : this.roadState.previewBridges > 0
+        ? `${this.roadState.previewBridges} automatic timber bridge${this.roadState.previewBridges === 1 ? '' : 's'} in this route`
+        : 'Roads snap to nearby white circles on roads and residences';
+    const build = this.mustFind<HTMLButtonElement>('[data-build]');
+    const canBuild = residenceActive ? this.residenceState.canBuild : this.roadState.canBuild;
+    build.disabled = !canBuild;
+    build.hidden = !canBuild;
+    const buildLabel = residenceActive
+      ? 'Construct residences instantly'
+      : this.roadState.previewBridges > 0
+        ? 'Build road and bridge'
+        : 'Build road';
+    build.setAttribute('aria-label', buildLabel);
+    build.title = `${buildLabel} (Enter)`;
+    this.syncBuildButtonPosition();
+  }
+
+  private toggleTool(tool: 'road' | 'residence'): void {
+    if (tool === 'road') {
+      const next = !this.roadEditor.isEnabled();
+      this.residenceTool.setEnabled(false);
+      this.roadEditor.setEnabled(next);
+      return;
+    }
+    const next = !this.residenceTool.isEnabled();
+    this.roadEditor.setEnabled(false);
+    this.residenceTool.setEnabled(next);
   }
 
   private readonly onResize = (): void => {
@@ -129,21 +412,65 @@ class RoadNetworkEditorApp {
     this.camera.aspect = width / Math.max(1, height);
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    this.syncBuildButtonPosition();
   };
 
-  private readonly startAmbientAudio = (): void => {
-    this.ambientAudio = new Audio('/sounds/ambient/river_water_rushing.mp3');
-    this.ambientAudio.loop = true;
-    this.ambientAudio.volume = 0.055;
-    void this.ambientAudio.play().catch(() => undefined);
-  };
+  private syncBuildButtonPosition(): void {
+    const build = this.mustFind<HTMLButtonElement>('[data-build]');
+    if (!this.roadEditor || !this.residenceTool) {
+      build.hidden = true;
+      return;
+    }
+    if (build.disabled) {
+      build.hidden = true;
+      return;
+    }
+    const position = this.residenceTool.isEnabled()
+      ? this.residenceTool.getBuildButtonPosition()
+      : this.roadEditor.getBuildButtonPosition();
+    if (!position) {
+      build.hidden = true;
+      return;
+    }
+
+    const viewport = this.mustFind<HTMLElement>('[data-viewport]');
+    const viewportRect = viewport.getBoundingClientRect();
+    const size = 44;
+    const margin = 10;
+    const gap = 12;
+    const left = Math.round(Math.max(
+      margin,
+      Math.min(viewportRect.width - size - margin, position.clientX - viewportRect.left + gap),
+    ));
+    const top = Math.round(Math.max(
+      margin,
+      Math.min(viewportRect.height - size - margin, position.clientY - viewportRect.top - size - gap),
+    ));
+    build.hidden = false;
+    build.style.left = `${left}px`;
+    build.style.top = `${top}px`;
+  }
 
   private readonly animate = (): void => {
     requestAnimationFrame(this.animate);
     const dt = Math.min(0.05, this.clock.getDelta());
     this.cameraController.update(dt);
-    this.decor.update(this.clock.elapsedTime);
+    this.roadEditor.update(dt);
+    setWorldAnimationTime(this.clock.elapsedTime);
+    this.riverWater?.tick(dt, this.clock.elapsedTime);
+    const cameraDistance = this.cameraController.getOrbitDistance();
+    updateTerrainZoomBlend(this.terrainSurface, cameraDistance, false);
+    this.forestController?.updateCamera(
+      this.camera,
+      cameraDistance,
+      false,
+      this.map.bounds,
+      this.cameraController.isNavigationActive(),
+    );
+    this.grass?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
+    this.riverReeds?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
     this.mustFind<HTMLElement>('[data-zoom]').textContent = `${Math.round(this.cameraController.getZoomPercent())}%`;
+    this.syncBuildButtonPosition();
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -152,6 +479,59 @@ class RoadNetworkEditorApp {
     if (!element) throw new Error(`Missing interface element: ${selector}`);
     return element;
   }
+}
+
+function treeCanopyRadius(placement: ForestTreePlacement): number {
+  if (placement.form === 'broad') return 4.1 * placement.scale;
+  if (placement.form === 'young' || placement.form === 'midstory') return 2.3 * placement.scale;
+  return 3.3 * placement.scale;
+}
+
+function treeClearRadius(placement: ForestTreePlacement, roadWidth: number): number {
+  return roadWidth * 0.5 + treeCanopyRadius(placement) + ROAD_CLEAR_MARGIN;
+}
+
+function createPropShadowMaterials(): {
+  shadowCast: THREE.MeshStandardMaterial;
+  shadowDepth: THREE.MeshDepthMaterial;
+} {
+  return {
+    shadowCast: new THREE.MeshStandardMaterial({
+      transparent: true,
+      opacity: 0,
+      colorWrite: false,
+      depthWrite: false,
+    }),
+    shadowDepth: new THREE.MeshDepthMaterial({
+      depthPacking: THREE.RGBADepthPacking,
+    }),
+  };
+}
+
+function createRiverRockMaterial(
+  rockTextures: Awaited<ReturnType<typeof loadMossyRockTextures>>,
+): THREE.MeshStandardMaterial {
+  const material = new THREE.MeshStandardMaterial({
+    map: rockTextures.map,
+    normalMap: rockTextures.normalMap,
+    roughnessMap: rockTextures.roughnessMap,
+    color: 0xb0aea0,
+    roughness: 0.92,
+    metalness: 0,
+  });
+  material.normalScale.set(0.55, 0.55);
+  return material;
+}
+
+function mulberry32(seed: number): () => number {
+  let value = seed >>> 0;
+  return () => {
+    value += 0x6d2b79f5;
+    let t = value;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 function pageTemplate(): string {
@@ -169,8 +549,8 @@ function pageTemplate(): string {
 
         <div class="view-panel panel" aria-label="View information">
           <div><span>ZOOM</span><strong data-zoom>100%</strong></div>
-          <div><span>MAP</span><strong>SMALL</strong></div>
-          <div><span>SEED</span><strong>071A2E0D</strong></div>
+          <div><span>LIGHT</span><strong>DAY</strong></div>
+          <div><span>SEED</span><strong>${WORLD_SEED.toString(16).padStart(8, '0').toUpperCase()}</strong></div>
         </div>
       </header>
 
@@ -179,6 +559,8 @@ function pageTemplate(): string {
         <dl>
           <div><dt>Road segments</dt><dd data-road-count>0</dd></div>
           <div><dt>River bridges</dt><dd data-bridge-count>0</dd></div>
+          <div><dt>Residences</dt><dd data-residence-count>0</dd></div>
+          <div><dt>Frontages</dt><dd data-frontage-count>0</dd></div>
           <div><dt>Draft points</dt><dd data-anchor-count>0</dd></div>
         </dl>
       </aside>
@@ -189,6 +571,8 @@ function pageTemplate(): string {
         <div class="control-row"><kbd>MMB</kbd><span>Rotate view</span></div>
         <div class="control-row"><kbd>WHEEL</kbd><span>Zoom 30–1000%</span></div>
         <div class="control-row"><kbd>Q / E</kbd><span>Rotate left / right</span></div>
+        <div class="control-row"><kbd>B</kbd><span>House placement tool</span></div>
+        <div class="control-row"><kbd>+ / −</kbd><span>Adjust residence plots</span></div>
       </aside>
 
       <div class="bridge-hint panel" data-bridge-hint>Cross the river to generate a bridge</div>
@@ -200,25 +584,34 @@ function pageTemplate(): string {
 
       <nav class="tool-dock panel" aria-label="Road building tools">
         <button class="tool-button is-active" data-tool-road type="button" aria-label="Toggle road tool" aria-pressed="true">
-          <span class="hammer-sprite" aria-hidden="true"></span>
+          <span class="road-sprite" aria-hidden="true"></span>
           <span class="tool-label">Road</span>
           <kbd>R</kbd>
+        </button>
+        <button class="tool-button residence-tool" data-tool-residence type="button" aria-label="Toggle house placement mode" aria-pressed="false" title="House placement mode (B)">
+          <span class="residence-sprite" aria-hidden="true">⌂</span>
+          <span class="tool-label">House</span>
+          <kbd>B</kbd>
         </button>
         <div class="dock-divider"></div>
         <button class="dock-action" data-undo type="button" aria-label="Undo last point or road"><span>↶</span>Undo</button>
         <button class="dock-action" data-redo type="button" aria-label="Redo road"><span>↷</span>Redo</button>
         <button class="dock-action danger" data-clear type="button" aria-label="Clear all roads"><span>×</span>Clear</button>
-        <div class="dock-divider"></div>
-        <button class="build-button" data-build type="button" disabled>
-          <span>Build road</span><kbd>ENTER</kbd>
-        </button>
       </nav>
 
-      <div class="curve-tip"><kbd>CTRL</kbd> + <kbd>WHEEL</kbd> bends the next spline segment</div>
+      <button class="floating-build-button" data-build type="button" aria-label="Build road" title="Build road (Enter)" disabled hidden>
+        <span class="hammer-sprite" aria-hidden="true"></span>
+      </button>
+
+      <div class="curve-tip">Terrain-aware splines · automatic river bridges · <kbd>CTRL</kbd> + <kbd>WHEEL</kbd> bends road splines</div>
     </section>
   `;
 }
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Missing #app root');
-new RoadNetworkEditorApp(root);
+void createPreferredRenderer().then(async (rendererBackend) => {
+  const materials = RoadMaterialFactory.createProgressive(rendererBackend.maxAnisotropy);
+  await materials.whenTexturesReady();
+  new RoadNetworkEditorApp(root, rendererBackend, materials);
+});

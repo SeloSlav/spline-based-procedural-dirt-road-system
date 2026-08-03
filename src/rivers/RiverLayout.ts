@@ -96,7 +96,9 @@ export class RiverLayout {
       const jitter = hashF64(seed ^ 0x5151, i, 0) * 0.22 - 0.11;
       const edgeAngle = (i / riverCount) * TAU + jitter;
       const mountainAngle = -Math.PI * 0.5 + (hashF64(seed ^ 0x7171, i, 2) - 0.5) * Math.PI * 0.95;
-      const angle = mountainAngle * 0.58 + edgeAngle * 0.42;
+      const angle = terrainPreset === 'risnjak_pass'
+        ? mountainAngle * 0.58 + edgeAngle * 0.42
+        : edgeAngle;
       const start = pointOnBoundsEdge(angle, bounds);
       corridors.push(buildCorridor(start, drain, seed ^ (i + 1) * 0x1337, i));
     }
@@ -104,14 +106,29 @@ export class RiverLayout {
     if (tributaryCount > 0 && corridors.length > 0) {
       for (let i = 0; i < tributaryCount; i++) {
         const parent = corridors[i % corridors.length];
-        const branchPoint = parent.points[Math.floor(parent.points.length * (0.36 + i * 0.08))];
+        const joinProgress = 0.3 + (i % 3) * 0.16;
+        const branchIndex = Math.floor((parent.points.length - 1) * joinProgress);
+        const branchPoint = parent.points[branchIndex];
         if (!branchPoint) continue;
-        const angle = hashF64(seed ^ 0x9393, i, 2) * TAU;
+        const previous = parent.points[Math.max(0, branchIndex - 1)];
+        const next = parent.points[Math.min(parent.points.length - 1, branchIndex + 1)];
+        const parentAngle = Math.atan2(next.z - previous.z, next.x - previous.x);
+        const side = i % 2 === 0 ? 1 : -1;
+        const angle = parentAngle
+          + side * Math.PI * 0.5
+          + (hashF64(seed ^ 0x9393, i, 2) - 0.5) * 0.72;
+        const reach = 118 + hashF64(seed ^ 0x7472, i, 5) * 72;
         const start = {
-          x: branchPoint.x + Math.cos(angle) * 58,
-          z: branchPoint.z + Math.sin(angle) * 58,
+          x: clamp(branchPoint.x + Math.cos(angle) * reach, bounds.minX + 42, bounds.maxX - 42),
+          z: clamp(branchPoint.z + Math.sin(angle) * reach, bounds.minZ + 42, bounds.maxZ - 42),
         };
-        const tributary = buildCorridor(start, drain, seed ^ (i + 11) * 0x2424, i + 100, 0.62);
+        const tributary = buildCorridor(
+          start,
+          branchPoint,
+          seed ^ (i + 11) * 0x2424,
+          i + 100,
+          0.62,
+        );
         if (tributary.points.length > 30) corridors.push(tributary);
       }
     }
@@ -388,8 +405,8 @@ function buildCorridor(
     channelDepth = lerp(channelDepth, Math.max(channelDepth, 1.65 * scale), headwaterBlend * 0.75);
     const distToDrain = Math.hypot(point.x - drain.x, point.z - drain.z);
     const mouthBlend = 1 - smoothstep(0, 130, distToDrain);
-    halfWidth = lerp(halfWidth, 26, mouthBlend * 0.82);
-    channelDepth = lerp(channelDepth, 3.65, mouthBlend * 0.6);
+    halfWidth = lerp(halfWidth, 26 * Math.max(0.55, scale), mouthBlend * 0.82);
+    channelDepth = lerp(channelDepth, 3.65 * Math.max(0.62, scale), mouthBlend * 0.6);
     return { x: point.x, z: point.z, progress, halfWidth, channelDepth };
   });
 
@@ -543,6 +560,10 @@ function lerp(a: number, b: number, t: number): number {
 
 function clamp01(value: number): number {
   return value < 0 ? 0 : value > 1 ? 1 : value;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return value < min ? min : value > max ? max : value;
 }
 
 function smoothstep(edge0: number, edge1: number, value: number): number {

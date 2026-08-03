@@ -293,15 +293,40 @@ kbd {
   box-shadow: inset 0 0 18px rgba(232, 195, 103, .08);
 }
 
-.hammer-sprite {
+.road-sprite {
   grid-row: 1 / 3;
   width: 43px;
   height: 43px;
   background-image: url('/assets/ui/icons/construction-actions.png');
   background-repeat: no-repeat;
   background-size: 300% 300%;
-  background-position: 50% 0%;
+  background-position: 0 0;
   filter: drop-shadow(0 2px 2px rgba(0,0,0,.42));
+}
+
+.residence-sprite {
+  grid-row: 1 / 3;
+  display: grid;
+  place-items: center;
+  width: 43px;
+  height: 43px;
+  color: #ead6a0;
+  font: 700 37px/1 Georgia, serif;
+  text-shadow: 0 2px 3px rgba(0, 0, 0, .58);
+  transform: translateY(-2px);
+}
+
+.residence-tool { min-width: 132px; }
+
+.bridge-hint.is-residence {
+  border-color: rgba(224, 194, 115, .38);
+  color: #dfd2ad;
+}
+
+.bridge-hint.is-residence::before {
+  content: '⌂';
+  top: 7px;
+  color: #d8be77;
 }
 
 .tool-label { align-self: end; font: 600 15px/1 'EB Garamond', serif; }
@@ -328,29 +353,38 @@ kbd {
 .dock-action:hover { color: #eee4ca; background: rgba(255,255,255,.05); }
 .dock-action.danger:hover { color: #e4a58f; }
 
-.build-button {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 160px;
-  justify-content: space-between;
-  padding: 0 12px 0 15px;
+.floating-build-button {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid rgba(244, 211, 117, .72);
   border-radius: 5px;
-  color: #888679;
-  background: rgba(8, 10, 7, .34);
-  font: 600 14px 'EB Garamond', serif;
-  transition: .16s ease;
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(130, 95, 39, .96), rgba(76, 56, 27, .94));
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .32), inset 0 1px rgba(255,255,255,.16);
+  backdrop-filter: blur(12px);
+  transition: filter .16s ease, transform .16s ease;
 }
 
-.build-button.is-ready {
-  color: #231d10;
-  background: linear-gradient(180deg, #e3c774, #c7a857);
-  box-shadow: 0 4px 16px rgba(18, 15, 8, .3), inset 0 1px rgba(255,255,255,.32);
-}
+.floating-build-button[hidden] { display: none; }
+.floating-build-button:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.floating-build-button:focus-visible { outline: 2px solid #f4d375; outline-offset: 2px; }
 
-.build-button.is-ready:hover { transform: translateY(-1px); filter: brightness(1.05); }
-.build-button:disabled { cursor: default; }
-.build-button.is-ready kbd { color: #4a3a1d; border-color: rgba(56, 42, 16, .25); background: rgba(255,255,255,.18); }
+.hammer-sprite {
+  width: 34px;
+  height: 34px;
+  background-image: url('/assets/ui/icons/construction-actions.png');
+  background-repeat: no-repeat;
+  background-size: 300% 300%;
+  background-position: 50% 0;
+  filter: drop-shadow(0 2px 2px rgba(0,0,0,.42));
+  pointer-events: none;
+}
 
 .curve-tip {
   position: absolute;
@@ -374,7 +408,6 @@ kbd {
   .status-message { min-width: 260px; }
   .tool-dock { width: calc(100% - 20px); justify-content: center; }
   .dock-action { min-width: 40px; }
-  .build-button { min-width: 128px; }
 }
 
 @media (max-width: 560px) {
@@ -385,7 +418,7 @@ kbd {
   .status-message { min-width: min(290px, calc(100vw - 24px)); }
   .tool-dock { bottom: 12px; height: 61px; padding: 5px; }
   .tool-button { min-width: 77px; grid-template-columns: 40px auto; }
+  .residence-tool { min-width: 104px; }
   .tool-button kbd, .dock-action { display: none; }
-  .build-button { min-width: 136px; }
   .curve-tip { display: none; }
 }

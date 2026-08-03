@@ -1,8 +1,10 @@
 import * as THREE from 'three';
+import type { RiverField } from '../rivers/RiverField.ts';
 import { RiverLayout } from '../rivers/RiverLayout.ts';
+import { sampleTerrainBlendWeights, sampleTerrainUv } from './TerrainBlendWeights.ts';
 import type { TerrainBounds } from './Terrain.ts';
 
-export const WORLD_SEED = 0x071a2e0d;
+export const WORLD_SEED = 0x4a11ce5d;
 export const PLAYABLE_SIZE = 620;
 export const TERRAIN_SIZE = 817;
 export const TERRAIN_HALF = TERRAIN_SIZE * 0.5;
@@ -14,7 +16,6 @@ export const MAP_BOUNDS: TerrainBounds = {
 };
 
 const PLAYABLE_HALF = PLAYABLE_SIZE * 0.5;
-const KUPA_REGIONAL_RELIEF_METERS = 1_528 - 290;
 const WATER_DEPTH = 1.08;
 
 export class FixedMap {
@@ -22,9 +23,10 @@ export class FixedMap {
   readonly riverLayout = RiverLayout.create({
     bounds: MAP_BOUNDS,
     seed: WORLD_SEED,
-    riverCount: 1,
-    tributaryCount: 0,
-    terrainPreset: 'kupa_valley',
+    riverCount: 3,
+    tributaryCount: 3,
+    drain: { x: 34, z: -32 },
+    terrainPreset: 'custom',
   });
 
   clampXZ(x: number, z: number): { x: number; z: number } {
@@ -41,7 +43,7 @@ export class FixedMap {
   }
 
   getRawHeightAt(x: number, z: number): number {
-    return sampleKupaValleyHeight(x, z, 1, WORLD_SEED);
+    return sampleConfluenceLowlandHeight(x, z, WORLD_SEED);
   }
 
   getWaterSurfaceY(x: number, z: number): number {
@@ -57,12 +59,19 @@ export class FixedMap {
     );
   }
 
-  createTerrainMesh(): THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial> {
+  createTerrainMesh(
+    material?: THREE.Material,
+    riverField?: RiverField,
+  ): THREE.Mesh<THREE.PlaneGeometry, THREE.Material> {
     const geometry = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, 256, 256);
     geometry.rotateX(-Math.PI * 0.5);
     const position = geometry.getAttribute('position');
+    const uv = geometry.getAttribute('uv');
     const colors = new Float32Array(position.count * 3);
-    const color = new THREE.Color();
+    const shoreBlends = new Float32Array(position.count);
+    const roadWearBlends = new Float32Array(position.count);
+    const quarryPadBlends = new Float32Array(position.count);
+    const dirtZoomGates = new Float32Array(position.count);
 
     for (let index = 0; index < position.count; index++) {
       const x = position.getX(index);
@@ -70,103 +79,44 @@ export class FixedMap {
       const height = this.getHeightAt(x, z);
       position.setY(index, height);
 
-      const riverMask = this.riverLayout.sampleRiverMask(x, z);
-      const upland = THREE.MathUtils.clamp((height - 5) / 95, 0, 1);
-      if (riverMask > 0.18) color.setRGB(0.35, 0.34, 0.19);
-      else color.setRGB(
-        THREE.MathUtils.lerp(0.76, 0.49, upland),
-        THREE.MathUtils.lerp(0.83, 0.65, upland),
-        THREE.MathUtils.lerp(0.61, 0.44, upland),
-      );
-      colors[index * 3] = color.r;
-      colors[index * 3 + 1] = color.g;
-      colors[index * 3 + 2] = color.b;
+      const weights = sampleTerrainBlendWeights(x, z);
+      colors[index * 3] = weights[0];
+      colors[index * 3 + 1] = weights[1];
+      colors[index * 3 + 2] = weights[2];
+      const terrainUv = sampleTerrainUv(x, z);
+      uv.setXY(index, terrainUv[0], terrainUv[1]);
+      shoreBlends[index] = riverField?.sampleMudBlendAt(x, z) ?? 0;
     }
 
     position.needsUpdate = true;
+    uv.needsUpdate = true;
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.setAttribute('uv1', geometry.getAttribute('uv').clone());
+    geometry.setAttribute('uv1', uv.clone());
+    geometry.setAttribute('shoreBlend', new THREE.BufferAttribute(shoreBlends, 1));
+    geometry.setAttribute('roadWearBlend', new THREE.BufferAttribute(roadWearBlends, 1));
+    geometry.setAttribute('quarryPadBlend', new THREE.BufferAttribute(quarryPadBlends, 1));
+    geometry.setAttribute('dirtZoomGate', new THREE.BufferAttribute(dirtZoomGates, 1));
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
 
-    const textureLoader = new THREE.TextureLoader();
-    const grass = configureTexture(
-      textureLoader.load('/assets/textures/terrain/manor_grass_meadow/albedo.png'),
-      62,
-      true,
+    const mesh = new THREE.Mesh(
+      geometry,
+      material ?? new THREE.MeshStandardMaterial({ color: 0x93a570, roughness: 0.94, vertexColors: true }),
     );
-    const normal = configureTexture(
-      textureLoader.load('/assets/textures/terrain/manor_grass_meadow/normal.png'),
-      62,
-    );
-    const roughness = configureTexture(
-      textureLoader.load('/assets/textures/terrain/manor_grass_meadow/roughness.png'),
-      62,
-    );
-    const ao = configureTexture(
-      textureLoader.load('/assets/textures/terrain/manor_grass_meadow/ao.png'),
-      62,
-    );
-
-    const material = new THREE.MeshStandardMaterial({
-      map: grass,
-      normalMap: normal,
-      normalScale: new THREE.Vector2(0.45, 0.45),
-      roughnessMap: roughness,
-      roughness: 0.94,
-      aoMap: ao,
-      aoMapIntensity: 0.5,
-      vertexColors: true,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.name = 'Kupa Valley terrain';
+    mesh.name = 'Confluence Lowlands terrain';
     mesh.receiveShadow = true;
     return mesh;
   }
 }
 
-function configureTexture(texture: THREE.Texture, repeat: number, srgb = false): THREE.Texture {
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(repeat, repeat);
-  texture.anisotropy = 8;
-  if (srgb) texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
-function sampleKupaValleyHeight(x: number, z: number, relief: number, seed: number): number {
+function sampleConfluenceLowlandHeight(x: number, z: number, seed: number): number {
   const offset = presetNoiseOffset(seed);
-  const normalizedX = x / PLAYABLE_HALF;
-  const westSlope = smoothstep(0.31, 0.94, -normalizedX);
-  const eastSlope = smoothstep(0.34, 0.94, normalizedX);
-  const sideSlope = Math.max(westSlope, eastSlope);
-  const ridge = ridgedFbm((x + offset.x) * 0.0048, (z + offset.z) * 0.0048, 4);
-  const mountainRelief = sideSlope
-    * KUPA_REGIONAL_RELIEF_METERS
-    * (0.3 + ridge * 0.3)
-    * relief;
-  const valleyUndulation = fbm((x + offset.x) * 0.0065, (z + offset.z) * 0.0065, 4)
-    * (1.3 + sideSlope * 4.2)
-    * relief;
-  const riverGrade = -z / Math.max(1, PLAYABLE_HALF) * 1.6;
-  const forestShoulder = Math.pow(sideSlope, 2.2)
-    * KUPA_REGIONAL_RELIEF_METERS
-    * 0.055
-    * relief;
-  return mountainRelief
-    + forestShoulder
-    + valleyUndulation
-    + riverGrade
-    + getEdgeHillHeight(x, z) * relief * 0.46;
-}
-
-function getEdgeHillHeight(x: number, z: number): number {
-  const edgeDistance = Math.max(Math.abs(x), Math.abs(z));
-  const t = smoothstep(PLAYABLE_SIZE * 0.44, TERRAIN_HALF, edgeDistance);
-  if (t <= 0) return 0;
-  const ridge = fbm(x * 0.0085 + 37.5, z * 0.0085 - 22.4, 5) + 0.5;
-  const detail = fbm(x * 0.026 - 6.2, z * 0.026 + 9.7, 3) + 0.5;
-  return t * t * (14 + ridge * 26) + t ** 4 * (14 + detail * 18);
+  const broadUndulation = fbm((x + offset.x) * 0.0038, (z + offset.z) * 0.0038, 4) * 5.2;
+  const meadowDetail = fbm((x - offset.z) * 0.012, (z + offset.x) * 0.012, 3) * 1.15;
+  const riverGrade = -z / Math.max(1, PLAYABLE_HALF) * 0.72;
+  const distanceFromCenter = Math.hypot(x, z) / TERRAIN_HALF;
+  const perimeterRise = smoothstep(0.72, 1, distanceFromCenter) * 2.4;
+  return broadUndulation + meadowDetail + riverGrade + perimeterRise;
 }
 
 function presetNoiseOffset(seed: number): { x: number; z: number } {
@@ -211,22 +161,6 @@ function fbm(x: number, z: number, octaves: number): number {
     frequency *= 2;
   }
   return value / norm - 0.5;
-}
-
-function ridgedFbm(x: number, z: number, octaves: number): number {
-  let value = 0;
-  let amplitude = 0.5;
-  let frequency = 1;
-  let norm = 0;
-  for (let index = 0; index < octaves; index++) {
-    const n = fbm(x * frequency, z * frequency, 1) + 0.5;
-    const ridge = 1 - Math.abs(n * 2 - 1);
-    value += ridge * ridge * amplitude;
-    norm += amplitude;
-    amplitude *= 0.5;
-    frequency *= 2.03;
-  }
-  return value / norm;
 }
 
 function smoothstep(edge0: number, edge1: number, value: number): number {

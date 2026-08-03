@@ -3,6 +3,10 @@ import type { FixedMap } from '../terrain/FixedMap.ts';
 import { maxWetRunLength, MAX_BRIDGE_SPAN_LENGTH } from './RiverBridgeSpans.ts';
 import type { RoadNetwork, RoadNetworkSnapshot } from './RoadNetwork.ts';
 import type { RoadRenderer } from './RoadRenderer.ts';
+import {
+  BuildingRoadConnections,
+  type BuildingRoadConnectionSource,
+} from './BuildingRoadConnections.ts';
 
 const MIN_POINT_DISTANCE = 1.05;
 const MIN_COMMIT_LENGTH = 3.5;
@@ -30,8 +34,11 @@ export class RoadEditor {
   private readonly network: RoadNetwork;
   private readonly renderer: RoadRenderer;
   private readonly onStateChanged: (state: RoadEditorState) => void;
+  private readonly onToggleRequested?: () => void;
+  private readonly buildingConnections: BuildingRoadConnections;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
+  private readonly projectedBuildPosition = new THREE.Vector3();
   private anchors: THREE.Vector3[] = [];
   private curves: number[] = [];
   private pendingCurve = 0;
@@ -51,7 +58,10 @@ export class RoadEditor {
     map: FixedMap;
     network: RoadNetwork;
     renderer: RoadRenderer;
+    connectionParent: THREE.Object3D;
+    getBuildings: () => Iterable<BuildingRoadConnectionSource>;
     onStateChanged: (state: RoadEditorState) => void;
+    onToggleRequested?: () => void;
   }) {
     this.domElement = options.domElement;
     this.camera = options.camera;
@@ -60,12 +70,20 @@ export class RoadEditor {
     this.network = options.network;
     this.renderer = options.renderer;
     this.onStateChanged = options.onStateChanged;
+    this.onToggleRequested = options.onToggleRequested;
+    this.buildingConnections = new BuildingRoadConnections({
+      parent: options.connectionParent,
+      map: options.map,
+      getBuildings: options.getBuildings,
+      getRoadNodes: () => this.network.nodes.values(),
+    });
     this.initialSnapshot = this.network.snapshot();
     this.domElement.addEventListener('mousedown', this.onPointerDown, { capture: true });
     this.domElement.addEventListener('mousemove', this.onPointerMove);
     this.domElement.addEventListener('mouseleave', this.onPointerLeave);
     this.domElement.addEventListener('wheel', this.onWheel, { passive: false, capture: true });
     window.addEventListener('keydown', this.onKeyDown);
+    this.buildingConnections.setVisible(this.enabled);
     this.emitState();
   }
 
@@ -80,6 +98,7 @@ export class RoadEditor {
   setEnabled(enabled: boolean): void {
     if (this.enabled === enabled) return;
     this.enabled = enabled;
+    this.buildingConnections.setVisible(enabled);
     if (!enabled) this.cancelDraft();
     else this.statusMessage = 'Click the terrain to begin a road';
     this.emitState();
@@ -89,15 +108,45 @@ export class RoadEditor {
     this.setEnabled(!this.enabled);
   }
 
+  activateOrCommit(): void {
+    if (this.canBuild) {
+      this.commit();
+      return;
+    }
+    if (!this.hasDraft()) this.toggle();
+  }
+
   getCursor(): string | null {
     if (!this.enabled) return null;
     return this.hasDraft() ? 'crosshair' : 'copy';
+  }
+
+  getBuildButtonPosition(): { clientX: number; clientY: number } | null {
+    if (!this.enabled || !this.canBuild) return null;
+    const lastAnchor = this.anchors.at(-1);
+    if (!lastAnchor) return null;
+    const rect = this.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+
+    const projected = this.projectedBuildPosition.copy(lastAnchor);
+    projected.y += 1.2;
+    projected.project(this.camera);
+    if (projected.z < -1 || projected.z > 1) return null;
+
+    return {
+      clientX: rect.left + (projected.x * 0.5 + 0.5) * rect.width,
+      clientY: rect.top + (-projected.y * 0.5 + 0.5) * rect.height,
+    };
   }
 
   shouldIgnoreCameraInput(event: MouseEvent | WheelEvent): boolean {
     if (!this.enabled) return false;
     if (event instanceof WheelEvent) return event.ctrlKey;
     return event.button === 0 || event.button === 2;
+  }
+
+  update(dt: number): void {
+    this.buildingConnections.update(dt);
   }
 
   commit(): void {
@@ -179,6 +228,7 @@ export class RoadEditor {
     if (event.button !== 0) return;
     const hit = this.pick(event.clientX, event.clientY);
     if (!hit) return;
+    this.buildingConnections.setCursor(hit);
     event.preventDefault();
     event.stopPropagation();
     const point = this.applySnap(hit);
@@ -194,11 +244,13 @@ export class RoadEditor {
   private readonly onPointerMove = (event: MouseEvent): void => {
     if (!this.enabled) return;
     const hit = this.pick(event.clientX, event.clientY);
+    this.buildingConnections.setCursor(hit);
     this.hover = hit ? this.applySnap(hit) : null;
     this.refreshPreview();
   };
 
   private readonly onPointerLeave = (): void => {
+    this.buildingConnections.setCursor(null);
     this.hover = null;
     this.refreshPreview();
   };
@@ -223,7 +275,8 @@ export class RoadEditor {
     const key = event.key.toLowerCase();
     if (key === 'r') {
       event.preventDefault();
-      this.toggle();
+      if (this.onToggleRequested) this.onToggleRequested();
+      else this.toggle();
       return;
     }
     if (key === 'escape') {
@@ -278,7 +331,7 @@ export class RoadEditor {
     if (wetRun > MAX_BRIDGE_SPAN_LENGTH) this.statusMessage = 'Crossing is too wide for a timber bridge';
     else if (this.anchors.length < 2) this.statusMessage = 'Click to set the next point';
     else if (length < MIN_COMMIT_LENGTH) this.statusMessage = 'Road segment is too short';
-    else this.statusMessage = 'Click for another point, or press Enter to build';
+    else this.statusMessage = 'Click for another point, or choose the hammer / press Enter to build';
     const preview = this.canBuild
       ? provisionalPreview
       : this.renderer.updatePreview(path, false);
@@ -322,6 +375,7 @@ export class RoadEditor {
   }
 
   private applySnap(point: THREE.Vector3): THREE.Vector3 {
+    this.buildingConnections.refresh();
     const networkSnap = this.network.findSnap(point, SNAP_DISTANCE);
     let best = networkSnap ? { point: networkSnap.point, distance: networkSnap.distance } : null;
     for (let index = 0; index < this.anchors.length - 1; index++) {
@@ -329,6 +383,8 @@ export class RoadEditor {
       const distance = distanceXZ(anchor, point);
       if (distance <= SNAP_DISTANCE && (!best || distance < best.distance)) best = { point: anchor, distance };
     }
+    const buildingSnap = this.buildingConnections.findSnap(point, SNAP_DISTANCE);
+    if (buildingSnap && (!best || buildingSnap.distance < best.distance)) best = buildingSnap;
     return best ? best.point.clone() : this.map.getPointAt(point.x, point.z);
   }
 
