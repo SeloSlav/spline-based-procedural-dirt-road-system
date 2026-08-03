@@ -48,9 +48,17 @@ import {
 } from './seedThreeForestCompaction.ts';
 import {
   applySeedThreeForestCardMotion,
+  applySeedThreeOverviewBillboardFade,
+  createSeedThreeOverviewBarkFadeMaterial,
   resolveSeedThreeForestCardMotion,
+  setSeedThreeOverviewBillboardFadeOpacity,
   stabilizeSeedThreeForestCardMaterial,
 } from './seedThreeForestMaterial.ts';
+import { BASELINE_ORBIT_DISTANCE } from '../../camera/CameraCurves.ts';
+import {
+  updateSeedThreeOverviewBillboardFade,
+  type SeedThreeOverviewBillboardFadeState,
+} from './seedThreeOverviewBillboardFade.ts';
 import {
   SEEDTHREE_FOREST_WIND_SPEED,
   shouldShowSeedThreeCrownUnderlay,
@@ -80,6 +88,7 @@ type PassPartitionedBucketSelection = SeedThreeBucketSelection & {
 
 export type SeedThreeForestInstances = {
   group: THREE.Group;
+  overviewBillboardGroup: THREE.Group;
   placements: ForestTreePlacement[];
   buckets: SpeciesBucket[];
   slotByLayoutIndex: Array<{ bucketIndex: number; slotIndex: number } | null>;
@@ -101,6 +110,8 @@ export type SeedThreeForestInstances = {
   } | null;
   visibilityDirty: boolean;
   cameraInteractionActive: boolean;
+  overviewBillboardFade: SeedThreeOverviewBillboardFadeState;
+  ownedOverviewFadeMaterials: THREE.Material[];
   updateTelemetry: SeedThreeForestUpdateTelemetry;
 };
 
@@ -181,7 +192,7 @@ const FOREST_LOD_OPTS = {
 
 const FOREST_NEAR_DISTANCE = 108;
 const FOREST_FIRST_PERSON_NEAR_DISTANCE = 132;
-const FOREST_VISIBILITY_PADDING = 26;
+const FOREST_VISIBILITY_PADDING = 4;
 const FOREST_UPDATE_BOOKKEEPING_HEADROOM_MS = 0.35;
 const FOREST_CONTINUOUS_UPDATE_BUDGET_MS = 2.75;
 const FOREST_MATRIX_WRITES_PER_CHUNK = 128;
@@ -238,6 +249,7 @@ function createInstancedLodSet(
     toneVariation?: number;
     crownUnderlayMeshes?: THREE.InstancedMesh[];
     overviewCards?: boolean;
+    ownedOverviewFadeMaterials?: Set<THREE.Material>;
   } = {},
 ): InstancedLodSet {
   const groupCount = slots.length;
@@ -254,7 +266,14 @@ function createInstancedLodSet(
       geo.userData.forestClone = true;
       geo.setAttribute('aWindVec', new THREE.InstancedBufferAttribute(new Float32Array(groupCount * 3), 3));
       geo.setAttribute('aAnchorPos', new THREE.InstancedBufferAttribute(new Float32Array(groupCount * 3), 3));
-      const im = new THREE.InstancedMesh(geo, forestBarkMaterial(mesh.material as THREE.Material), groupCount);
+      const sourceMaterial = forestBarkMaterial(mesh.material as THREE.Material);
+      const material = options.overviewCards === true
+        ? createSeedThreeOverviewBarkFadeMaterial(sourceMaterial)
+        : sourceMaterial;
+      if (options.overviewCards === true) {
+        options.ownedOverviewFadeMaterials?.add(material);
+      }
+      const im = new THREE.InstancedMesh(geo, material, groupCount);
       im.name = `${debugName} branches`;
       im.castShadow = castShadow;
       im.receiveShadow = true;
@@ -316,6 +335,9 @@ function createInstancedLodSet(
           ),
           sourceMaterial,
         );
+        if (options.overviewCards === true) {
+          applySeedThreeOverviewBillboardFade(fmat);
+        }
         if (options.seasonalDeciduous) {
           options.seasonalCardMaterials?.add(fmat as THREE.Material);
         }
@@ -355,6 +377,7 @@ function createSpeciesBucket(
   rng: Rng,
   seasonalCardMaterials: Set<THREE.Material>,
   crownUnderlayMeshes: THREE.InstancedMesh[],
+  ownedOverviewFadeMaterials: Set<THREE.Material>,
 ): SpeciesBucket {
   const nearLevel = findLodLevel(prototype, 'LOD2');
   // LOD4's crossed whole-limb cards read as flat green triangles from the
@@ -391,6 +414,7 @@ function createSpeciesBucket(
       toneVariation: overviewTone.variation,
       crownUnderlayMeshes,
       overviewCards: true,
+      ownedOverviewFadeMaterials,
     },
   );
   const nearSlotIndices = slots.flatMap((slot, index) => slot.forceOverview ? [] : [index]);
@@ -474,6 +498,10 @@ export async function createSeedThreeForest(
   const hiddenMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
   const group = new THREE.Group();
   group.name = 'SeedThree Gorski Kotar forest';
+  const overviewBillboardGroup = new THREE.Group();
+  overviewBillboardGroup.name = 'SeedThree overview tree billboards';
+  overviewBillboardGroup.visible = false;
+  group.add(overviewBillboardGroup);
 
   const assetsByPreset = new Map<SeedThreePresetKey, SeedThreeSpeciesAssets>();
   const prototypeByPreset = new Map<SeedThreePresetKey, THREE.LOD>();
@@ -582,6 +610,7 @@ export async function createSeedThreeForest(
   const buckets: SpeciesBucket[] = [];
   const seasonalCardMaterials = new Set<THREE.Material>();
   const crownUnderlayMeshes: THREE.InstancedMesh[] = [];
+  const ownedOverviewFadeMaterials = new Set<THREE.Material>();
 
   for (const presetKey of GORSKI_KOTAR_PRESETS) {
     const slots = placementsByPreset.get(presetKey);
@@ -601,12 +630,13 @@ export async function createSeedThreeForest(
       new Rng(`bucket:${presetKey}:${treeSeed}`),
       seasonalCardMaterials,
       crownUnderlayMeshes,
+      ownedOverviewFadeMaterials,
     );
     buckets.push(bucket);
     if (bucket.nearSet.branches) group.add(bucket.nearSet.branches);
     for (const cardMesh of bucket.nearSet.cards) group.add(cardMesh);
-    if (bucket.overviewSet.branches) group.add(bucket.overviewSet.branches);
-    for (const cardMesh of bucket.overviewSet.cards) group.add(cardMesh);
+    if (bucket.overviewSet.branches) overviewBillboardGroup.add(bucket.overviewSet.branches);
+    for (const cardMesh of bucket.overviewSet.cards) overviewBillboardGroup.add(cardMesh);
   }
 
   // Start from a deterministic close-camera state so all three global modes
@@ -649,8 +679,10 @@ export async function createSeedThreeForest(
     if (startup) startup.seedThree = lastStartupTiming;
   }
   console.info('[Startup] SeedThree forest stages', lastStartupTiming);
+  setSeedThreeOverviewBillboardFadeOpacity(0);
   return {
     group,
+    overviewBillboardGroup,
     placements,
     buckets,
     slotByLayoutIndex,
@@ -675,6 +707,8 @@ export async function createSeedThreeForest(
     pendingLodWork: null,
     visibilityDirty: false,
     cameraInteractionActive: false,
+    overviewBillboardFade: { enabled: false, opacity: 0 },
+    ownedOverviewFadeMaterials: [...ownedOverviewFadeMaterials],
     updateTelemetry: createSeedThreeUpdateTelemetry(),
   };
 }

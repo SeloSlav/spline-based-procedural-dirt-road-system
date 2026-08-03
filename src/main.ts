@@ -18,7 +18,7 @@ import { createRiverShoreStones } from './rivers/RiverShoreStones.ts';
 import { createRiverWaterMesh, type RiverWaterController } from './rivers/RiverWaterMesh.ts';
 import { createPreferredRenderer, type RendererBackend, type SupportedRenderer } from './scene/RendererBackend.ts';
 import { setWorldAnimationTime } from './scene/worldAnimationTime.ts';
-import { FixedMap, WORLD_SEED } from './terrain/FixedMap.ts';
+import { FixedMap, PLAYABLE_SIZE, TERRAIN_SIZE, WORLD_SEED } from './terrain/FixedMap.ts';
 import type { Terrain } from './terrain/Terrain.ts';
 import { distancePointToPolylineXZ } from './utils/pathGeometry.ts';
 import { isPointInPolygon2 } from './utils/polygonGeometry.ts';
@@ -59,6 +59,9 @@ class RoadNetworkEditorApp {
   private forestController: SeedThreeForestController | null = null;
   private forestPlacements: ForestTreePlacement[] = [];
   private grass: GrassBladeField | null = null;
+  private readonly frameSamples: number[] = [];
+  private readonly cpuSamples: number[] = [];
+  private readonly renderSubmitSamples: number[] = [];
   private lastTopologyRevision = -1;
   private roadState: RoadEditorState = {
     enabled: true,
@@ -89,6 +92,7 @@ class RoadNetworkEditorApp {
     this.root = root;
     this.rendererBackend = rendererBackend;
     this.renderer = rendererBackend.renderer;
+    document.documentElement.dataset.rendererBackend = rendererBackend.kind;
     this.root.innerHTML = pageTemplate();
     const viewport = this.mustFind<HTMLElement>('[data-viewport]');
     viewport.prepend(this.renderer.domElement);
@@ -110,8 +114,8 @@ class RoadNetworkEditorApp {
       this.riverField,
     );
     this.terrainSurface = {
-      playableSize: 620,
-      size: 817,
+      playableSize: PLAYABLE_SIZE,
+      size: TERRAIN_SIZE,
       mesh: terrain,
       getHeightAt: (x, z) => this.map.getHeightAt(x, z),
       getPointAt: (x, z, offset = 0) => this.map.getPointAt(x, z, offset),
@@ -453,6 +457,7 @@ class RoadNetworkEditorApp {
 
   private readonly animate = (): void => {
     requestAnimationFrame(this.animate);
+    const cpuStartedAt = performance.now();
     const dt = Math.min(0.05, this.clock.getDelta());
     this.cameraController.update(dt);
     this.roadEditor.update(dt);
@@ -466,13 +471,105 @@ class RoadNetworkEditorApp {
       false,
       this.map.bounds,
       this.cameraController.isNavigationActive(),
+      dt,
     );
     this.grass?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
     this.riverReeds?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
     this.mustFind<HTMLElement>('[data-zoom]').textContent = `${Math.round(this.cameraController.getZoomPercent())}%`;
     this.syncBuildButtonPosition();
+    const renderStartedAt = performance.now();
     this.renderer.render(this.scene, this.camera);
+    this.publishFrameDiagnostics(
+      dt,
+      renderStartedAt - cpuStartedAt,
+      performance.now() - renderStartedAt,
+    );
   };
+
+  private publishFrameDiagnostics(dt: number, cpuMs: number, renderSubmitMs: number): void {
+    this.frameSamples.push(dt);
+    this.cpuSamples.push(cpuMs);
+    this.renderSubmitSamples.push(renderSubmitMs);
+    if (this.frameSamples.length < 120) return;
+    const sorted = [...this.frameSamples].sort((left, right) => left - right);
+    const total = this.frameSamples.reduce((sum, sample) => sum + sample, 0);
+    const p95Index = Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95));
+    const info = this.renderer.info as typeof this.renderer.info & {
+      render?: { calls?: number; triangles?: number; points?: number; lines?: number };
+    };
+    document.documentElement.dataset.frameFps = (this.frameSamples.length / total).toFixed(1);
+    document.documentElement.dataset.frameP95Ms = (sorted[p95Index]! * 1_000).toFixed(2);
+    document.documentElement.dataset.cpuMs = (
+      this.cpuSamples.reduce((sum, sample) => sum + sample, 0) / this.cpuSamples.length
+    ).toFixed(2);
+    document.documentElement.dataset.renderSubmitMs = (
+      this.renderSubmitSamples.reduce((sum, sample) => sum + sample, 0)
+      / this.renderSubmitSamples.length
+    ).toFixed(2);
+    document.documentElement.dataset.renderCalls = String(info.render?.calls ?? 0);
+    document.documentElement.dataset.renderTriangles = String(info.render?.triangles ?? 0);
+    if (this.forestController) {
+      document.documentElement.dataset.forestStats = JSON.stringify(
+        this.forestController.getStructuralStats(),
+      );
+    }
+    if (this.forest) {
+      let viewInstances = 0;
+      let shadowInstances = 0;
+      let viewTriangles = 0;
+      let shadowTriangles = 0;
+      let viewDraws = 0;
+      this.forest.group.traverse((object) => {
+        const mesh = object as THREE.InstancedMesh;
+        if (!mesh.isInstancedMesh) return;
+        const viewCount = Number(mesh.userData.forestViewInstanceCount) || 0;
+        const shadowCount = Number(mesh.userData.forestShadowInstanceCount) || 0;
+        const geometryTriangles = mesh.geometry.index
+          ? mesh.geometry.index.count / 3
+          : mesh.geometry.attributes.position.count / 3;
+        if (viewCount > 0) viewDraws += 1;
+        viewInstances += viewCount;
+        shadowInstances += shadowCount;
+        viewTriangles += viewCount * geometryTriangles;
+        shadowTriangles += shadowCount * geometryTriangles;
+      });
+      document.documentElement.dataset.forestPassStats = JSON.stringify({
+        viewTrees: this.forest.buckets.reduce(
+          (sum, bucket) => sum + bucket.nearViewSlotCount + bucket.overviewViewSlotCount,
+          0,
+        ),
+        viewDraws,
+        viewInstances,
+        shadowInstances,
+        viewTriangles,
+        shadowTriangles,
+      });
+    }
+    if (this.grass) {
+      let draws = 0;
+      let instances = 0;
+      let triangles = 0;
+      this.grass.group.traverse((object) => {
+        const mesh = object as THREE.InstancedMesh;
+        if (!mesh.isInstancedMesh || !mesh.visible || mesh.count <= 0) return;
+        const geometryTriangles = mesh.geometry.index
+          ? mesh.geometry.index.count / 3
+          : mesh.geometry.attributes.position.count / 3;
+        draws += 1;
+        instances += mesh.count;
+        triangles += mesh.count * geometryTriangles;
+      });
+      document.documentElement.dataset.grassStats = JSON.stringify({
+        draws,
+        instances,
+        triangles,
+        stream: this.grass.getStreamTelemetry(),
+      });
+    }
+    this.frameSamples.length = 0;
+    this.cpuSamples.length = 0;
+    this.renderSubmitSamples.length = 0;
+  }
 
   private mustFind<T extends Element>(selector: string): T {
     const element = this.root.querySelector<T>(selector);

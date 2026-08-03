@@ -132,6 +132,7 @@ type PendingSlot = {
   worldChunkX: number;
   worldChunkZ: number;
   sortKey: number;
+  clearOnly?: boolean;
 };
 
 type SlotRecord = {
@@ -438,8 +439,8 @@ export async function createGrassBladeField(
       record.meshCounts[meshIndex] = generated.length;
       dirtyInstanceCounts[meshIndex] = rewrite.dirtyInstanceCount;
     }
-    record.worldChunkX = worldChunkX;
-    record.worldChunkZ = worldChunkZ;
+    record.worldChunkX = job.request.clearOnly ? Number.NaN : worldChunkX;
+    record.worldChunkZ = job.request.clearOnly ? Number.NaN : worldChunkZ;
     return {
       cleared,
       written,
@@ -454,19 +455,81 @@ export async function createGrassBladeField(
     focusZ: number,
     nearRadius: number,
   ): void => {
-    const newestRequests: PendingSlot[] = [];
+    const desiredChunks: Array<{
+      chunkX: number;
+      chunkZ: number;
+      sortKey: number;
+    }> = [];
+    const desiredKeys = new Set<string>();
     for (let localZ = 0; localZ < GRID_SIDE; localZ++) {
       for (let localX = 0; localX < GRID_SIDE; localX++) {
         const { chunkX, chunkZ } = worldChunkAt(centerChunkX, centerChunkZ, localX, localZ);
         if (!chunkInStreamRange(chunkX, chunkZ, focusX, focusZ, nearRadius)) continue;
-        const gridIdx = gridIndex(localX, localZ);
-        const existing = slotRecords[gridIdx]!;
-        if (existing.worldChunkX === chunkX && existing.worldChunkZ === chunkZ) continue;
-        newestRequests.push({
-          slotIndex: gridIdx,
-          worldChunkX: chunkX,
-          worldChunkZ: chunkZ,
+        desiredChunks.push({
+          chunkX,
+          chunkZ,
           sortKey: slotDistanceSq(chunkX, chunkZ, focusX, focusZ),
+        });
+        desiredKeys.add(chunkKey(chunkX, chunkZ));
+      }
+    }
+
+    // Buffer slots are a compact pool, not a copy of the square world grid.
+    // Retain slots whose world chunk is still requested and recycle departed
+    // chunks in place. This keeps every submitted instance inside the active
+    // circular stream instead of drawing hidden square-grid holes.
+    const pendingBySlot = new Map(pendingSlots.map((request) => [request.slotIndex, request]));
+    const slotByChunk = new Map<string, number>();
+    for (let slotIndex = 0; slotIndex < slotRecords.length; slotIndex++) {
+      const pending = pendingBySlot.get(slotIndex);
+      const record = slotRecords[slotIndex]!;
+      const worldChunkX = pending?.worldChunkX ?? record.worldChunkX;
+      const worldChunkZ = pending?.worldChunkZ ?? record.worldChunkZ;
+      if (pending?.clearOnly || !Number.isFinite(worldChunkX) || !Number.isFinite(worldChunkZ)) {
+        continue;
+      }
+      const key = chunkKey(worldChunkX, worldChunkZ);
+      if (desiredKeys.has(key) && !slotByChunk.has(key)) slotByChunk.set(key, slotIndex);
+    }
+
+    const retainedSlots = new Set(slotByChunk.values());
+    const freeSlots: number[] = [];
+    for (let slotIndex = 0; slotIndex < slotRecords.length; slotIndex++) {
+      if (!retainedSlots.has(slotIndex)) freeSlots.push(slotIndex);
+    }
+
+    const newestRequests: PendingSlot[] = [];
+    for (const desired of desiredChunks) {
+      const key = chunkKey(desired.chunkX, desired.chunkZ);
+      const retainedSlot = slotByChunk.get(key);
+      if (retainedSlot !== undefined) {
+        const retainedPending = pendingBySlot.get(retainedSlot);
+        if (retainedPending) newestRequests.push(retainedPending);
+        continue;
+      }
+      const slotIndex = freeSlots.shift();
+      if (slotIndex === undefined) break;
+      retainedSlots.add(slotIndex);
+      newestRequests.push({
+        slotIndex,
+        worldChunkX: desired.chunkX,
+        worldChunkZ: desired.chunkZ,
+        sortKey: desired.sortKey,
+      });
+    }
+
+    // A clipped playable edge can request fewer chunks than the previous
+    // stream. Clear only those surplus resident slots; untouched empty capacity
+    // never reaches the GPU draw prefix.
+    for (const slotIndex of freeSlots) {
+      const record = slotRecords[slotIndex]!;
+      if (Number.isFinite(record.worldChunkX) && Number.isFinite(record.worldChunkZ)) {
+        newestRequests.push({
+          slotIndex,
+          worldChunkX: 0,
+          worldChunkZ: 0,
+          sortKey: -1,
+          clearOnly: true,
         });
       }
     }
@@ -508,11 +571,9 @@ export async function createGrassBladeField(
           activeSlotJob = {
             request: { ...request },
             phase: 'generate',
-            generationIterator: generateSeedThreeSlotInstances(
-              streamMeshes,
-              request,
-              context,
-            ),
+            generationIterator: request.clearOnly
+              ? generateEmptySlotInstances(streamMeshes.length)
+              : generateSeedThreeSlotInstances(streamMeshes, request, context),
             generatedByMesh: [],
           };
         }
@@ -797,7 +858,21 @@ function samePendingSlot(
     && !!right
     && left.slotIndex === right.slotIndex
     && left.worldChunkX === right.worldChunkX
-    && left.worldChunkZ === right.worldChunkZ;
+    && left.worldChunkZ === right.worldChunkZ
+    && left.clearOnly === right.clearOnly;
+}
+
+function chunkKey(chunkX: number, chunkZ: number): string {
+  return `${chunkX}:${chunkZ}`;
+}
+
+function* generateEmptySlotInstances(
+  meshCount: number,
+): Generator<number, Array<GeneratedGrassInstance[] | GeneratedWildflowerInstance[]>, void> {
+  return Array.from(
+    { length: meshCount },
+    () => [] as GeneratedGrassInstance[] | GeneratedWildflowerInstance[],
+  );
 }
 
 function applyStreamMeshUpdateRanges(

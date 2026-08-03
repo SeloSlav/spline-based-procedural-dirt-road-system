@@ -20,6 +20,11 @@ const fenceMaterial = new THREE.MeshStandardMaterial({ color: 0x69503b, roughnes
 const fenceDarkMaterial = new THREE.MeshStandardMaterial({ color: 0x49382c, roughness: 0.98 });
 const FENCE_BAY_LENGTH = 2.35;
 const GATE_WIDTH = 1.8;
+const GATE_CLEARANCE = 2.05;
+const GATE_LINTEL_HEIGHT = 0.18;
+const GATE_LINTEL_DEPTH = 0.2;
+const GATE_POST_RADIUS = 0.14;
+const GATE_JOIN_OVERLAP = 0.04;
 
 export type ResidenceZoneState = {
   id: string;
@@ -212,18 +217,60 @@ function addZoneFences(group: THREE.Group, map: FixedMap, layout: BurgageLayoutR
       x: parcel.frontRight.x - parcel.frontLeft.x,
       z: parcel.frontRight.z - parcel.frontLeft.z,
     });
-    const yaw = Math.atan2(direction.x, direction.z);
-    for (const side of [-1, 1]) {
-      const x = center.x + direction.x * side * GATE_WIDTH * 0.5;
-      const z = center.z + direction.z * side * GATE_WIDTH * 0.5;
-      addFencePost(fence, map, x, z, 1.38, 0.14);
-    }
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(GATE_WIDTH + 0.45, 0.13, 0.15), fenceDarkMaterial);
-    lintel.position.set(center.x, map.getHeightAt(center.x, center.z) + 1.28, center.z);
-    lintel.rotation.y = yaw;
-    lintel.castShadow = true;
-    fence.add(lintel);
+    addGateEntrance(fence, map, center, direction);
   }
+}
+
+function addGateEntrance(
+  group: THREE.Group,
+  map: FixedMap,
+  center: Point2,
+  direction: Point2,
+): void {
+  const gatePosts = ([-1, 1] as const).map((side): Point2 => ({
+    x: center.x + direction.x * side * GATE_WIDTH * 0.5,
+    z: center.z + direction.z * side * GATE_WIDTH * 0.5,
+  })) as [Point2, Point2];
+  const groundHeights = gatePosts.map((post) => map.getHeightAt(post.x, post.z));
+  const lintelBottom = Math.max(...groundHeights) + GATE_CLEARANCE;
+  const lintelY = lintelBottom + GATE_LINTEL_HEIGHT * 0.5;
+
+  gatePosts.forEach((post, index) => {
+    const postTop = lintelBottom + GATE_JOIN_OVERLAP;
+    addFencePost(
+      group,
+      map,
+      post.x,
+      post.z,
+      postTop - groundHeights[index],
+      GATE_POST_RADIUS,
+      'Gate upright',
+    );
+  });
+
+  const poleVector = new THREE.Vector3(
+    gatePosts[1].x - gatePosts[0].x,
+    0,
+    gatePosts[1].z - gatePosts[0].z,
+  );
+  const lintelLength = poleVector.length() + GATE_POST_RADIUS * 2.8;
+  const lintel = new THREE.Mesh(
+    new THREE.BoxGeometry(lintelLength, GATE_LINTEL_HEIGHT, GATE_LINTEL_DEPTH),
+    fenceDarkMaterial,
+  );
+  lintel.name = 'Supported gate lintel';
+  lintel.position.set(
+    (gatePosts[0].x + gatePosts[1].x) * 0.5,
+    lintelY,
+    (gatePosts[0].z + gatePosts[1].z) * 0.5,
+  );
+  lintel.quaternion.setFromUnitVectors(
+    new THREE.Vector3(1, 0, 0),
+    poleVector.normalize(),
+  );
+  lintel.castShadow = true;
+  lintel.receiveShadow = true;
+  group.add(lintel);
 }
 
 function addFenceRun(group: THREE.Group, map: FixedMap, start: Point2, end: Point2): void {
@@ -256,11 +303,13 @@ function addFencePost(
   z: number,
   height = 1.18,
   radius = 0.105,
+  name = 'Fence post',
 ): void {
   const post = new THREE.Mesh(
     new THREE.CylinderGeometry(radius * 0.82, radius, height, 6),
     fenceDarkMaterial,
   );
+  post.name = name;
   post.position.set(x, map.getHeightAt(x, z) + height * 0.5, z);
   post.rotation.y = hashSeed(`${x.toFixed(2)}:${z.toFixed(2)}`) * 0.00001;
   post.castShadow = true;

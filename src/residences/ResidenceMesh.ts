@@ -18,6 +18,7 @@ const materials = {
 };
 
 const facadeMaterials = [materials.plasterIvory, materials.plasterOchre, materials.plasterClay] as const;
+const SIDE_WINDOW_Z_OFFSET = 1.25;
 
 export type ResidenceVisual = {
   group: THREE.Group;
@@ -83,8 +84,8 @@ export function createResidenceMesh(seed: number): ResidenceVisual {
   const doorX = entrySide * 1.03;
   addDoor(group, doorX, foundationHeight + 0.05, frontZ);
   addWindow(group, -entrySide * 1.18, foundationHeight + 1.78, frontZ + 0.015, 0, rng);
-  addWindow(group, entrySide * (halfWidth + 0.03), foundationHeight + 1.76, -0.62, entrySide * Math.PI * 0.5, rng);
-  addWindow(group, -entrySide * (halfWidth + 0.03), foundationHeight + 1.76, 0.48, -entrySide * Math.PI * 0.5, rng);
+  addWindow(group, entrySide * (halfWidth + 0.03), foundationHeight + 1.76, -SIDE_WINDOW_Z_OFFSET, entrySide * Math.PI * 0.5, rng);
+  addWindow(group, -entrySide * (halfWidth + 0.03), foundationHeight + 1.76, SIDE_WINDOW_Z_OFFSET, -entrySide * Math.PI * 0.5, rng);
 
   addBox(group, 1.55, 0.17, 0.62, materials.stoneDark, doorX, 0.085, halfDepth + 0.38, 'Front step');
   addBox(group, 1.3, 0.16, 0.48, materials.stone, doorX, 0.245, halfDepth + 0.27, 'Upper step');
@@ -96,7 +97,7 @@ export function createResidenceMesh(seed: number): ResidenceVisual {
   addBox(group, 0.7, 2.1, 0.7, materials.stoneDark, chimneyX, wallTop + 1.28, chimneyZ, 'Stone chimney');
   addBox(group, 0.82, 0.17, 0.82, materials.stone, chimneyX, wallTop + 2.36, chimneyZ, 'Chimney cap');
 
-  addYardCraft(group, entrySide, halfWidth, halfDepth, rng);
+  addFirewoodStack(group, entrySide, halfWidth, halfDepth);
   group.traverse((object) => {
     if (!(object instanceof THREE.Mesh)) return;
     object.castShadow = true;
@@ -141,10 +142,6 @@ function addTimberFrame(
   for (const z of [-halfDepth, halfDepth]) {
     addBox(group, width + 0.22, 0.2, 0.2, materials.timberDark, 0, baseY + 0.12, z, 'Sill beam');
     addBox(group, width + 0.25, 0.22, 0.22, materials.timberDark, 0, baseY + height - 0.11, z, 'Wall plate');
-    for (const sign of [-1, 1]) {
-      const brace = addBox(group, width * 0.34, 0.14, 0.14, materials.timber, sign * width * 0.25, baseY + height * 0.54, z + (z > 0 ? 0.03 : -0.03), 'Diagonal brace');
-      brace.rotation.z = sign * 0.68;
-    }
   }
   for (const x of [-halfWidth, halfWidth]) {
     addBox(group, 0.2, postHeight, 0.2, materials.timberDark, x, baseY + postHeight * 0.5, 0, 'Side frame post');
@@ -257,18 +254,13 @@ function addEntryCanopy(
   canopy.rotation.x = -0.13;
 }
 
-function addYardCraft(
+function addFirewoodStack(
   group: THREE.Group,
   entrySide: -1 | 1,
   halfWidth: number,
   halfDepth: number,
-  rng: () => number,
 ): void {
   const side = -entrySide;
-  addBox(group, 0.64, 0.38, 0.58, materials.timberDark, side * (halfWidth - 0.42), 0.19, halfDepth + 0.86, 'Chopping block');
-  const handle = addBox(group, 0.08, 0.9, 0.08, materials.timber, side * (halfWidth - 0.4), 0.73, halfDepth + 0.84, 'Axe handle');
-  handle.rotation.z = side * (0.17 + rng() * 0.08);
-  addBox(group, 0.34, 0.28, 0.08, materials.iron, side * (halfWidth - 0.32), 1.12, halfDepth + 0.84, 'Axe head');
   for (let index = 0; index < 5; index += 1) {
     const log = addBox(group, 1.65, 0.2, 0.2, index % 2 ? materials.timber : materials.timberWeathered, -side * (halfWidth - 0.65), 0.13 + Math.floor(index / 3) * 0.19, -halfDepth - 0.46 + (index % 3) * 0.23, 'Stacked firewood');
     log.rotation.z = Math.PI * 0.5;

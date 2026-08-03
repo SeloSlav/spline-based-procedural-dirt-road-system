@@ -238,6 +238,10 @@ function createMarkerMaterial(side: THREE.Side): THREE.MeshBasicMaterial {
     color: 0xffffff,
     transparent: true,
     opacity: 0.94,
+    // These are editor overlays. Road junction shoulders can sit slightly
+    // above the stored node height, so normal depth testing hides parts of a
+    // ring precisely when the cursor gets close enough to reveal it.
+    depthTest: false,
     depthWrite: false,
     side,
   });
