@@ -1,8 +1,6 @@
 export const OVERVIEW_BILLBOARD_REMOVE_ZOOM_PERCENT = 100;
 export const OVERVIEW_BILLBOARD_REVEAL_ZOOM_PERCENT = 96;
 export const OVERVIEW_BILLBOARD_FULL_OPACITY_ZOOM_PERCENT = 70;
-export const OVERVIEW_NEAR_REPLACEMENT_SHOW_ZOOM_PERCENT = 72;
-export const OVERVIEW_NEAR_REPLACEMENT_HIDE_ZOOM_PERCENT = 68;
 
 const OVERVIEW_BILLBOARD_FADE_IN_HALF_LIFE_SECONDS = 0.14;
 const OVERVIEW_BILLBOARD_FADE_OUT_HALF_LIFE_SECONDS = 0.1;
@@ -17,23 +15,6 @@ export type SeedThreeOverviewBillboardFadeResult = SeedThreeOverviewBillboardFad
   targetOpacity: number;
   visible: boolean;
 };
-
-/**
- * Bring the real LOD2 tree in before its overview card starts dissolving.
- * The wider return threshold prevents wheel easing around the start of the
- * crossfade from repeatedly repacking the two instance sets.
- */
-export function shouldUseSeedThreeOverviewNearReplacement(
-  currentlyActive: boolean,
-  zoomPercent: number,
-  firstPersonActive = false,
-): boolean {
-  if (firstPersonActive) return true;
-  const safeZoomPercent = Number.isFinite(zoomPercent) ? Math.max(0, zoomPercent) : 100;
-  return currentlyActive
-    ? safeZoomPercent > OVERVIEW_NEAR_REPLACEMENT_HIDE_ZOOM_PERCENT
-    : safeZoomPercent >= OVERVIEW_NEAR_REPLACEMENT_SHOW_ZOOM_PERCENT;
-}
 
 function smootherstep01(value: number): number {
   const t = Math.max(0, Math.min(1, value));

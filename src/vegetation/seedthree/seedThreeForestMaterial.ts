@@ -38,12 +38,7 @@ type SeedThreeOpacityNodeMaterial = THREE.Material & {
 
 const overviewBillboardFadeOpacity = uniform(0) as { value: number } & TslNode;
 
-/**
- * Dissolve overview cards through their authored alpha cutout. Alpha hashing
- * changes its sub-pixel pattern as the camera moves and reads as whole-tree
- * flicker; alpha-to-coverage keeps the transition stable under the renderer's
- * MSAA while preserving depth writes for crossed foliage planes.
- */
+/** Smoothly blend the far-card overlay over an always-resident real tree. */
 export function applySeedThreeOverviewBillboardFade(
   material: THREE.Material,
 ): THREE.Material {
@@ -51,19 +46,21 @@ export function applySeedThreeOverviewBillboardFade(
   const target = material as SeedThreeOpacityNodeMaterial;
   const baseOpacity = target.opacityNode ?? (float(1) as TslNode);
   target.opacityNode = baseOpacity.mul(overviewBillboardFadeOpacity);
+  // Both alpha hashing and an animated alpha-test threshold change foliage
+  // coverage discontinuously while zooming. The overview layer is small and
+  // temporary, so conventional blending is the stable crossfade here.
+  material.alphaTest = 0;
   material.alphaHash = false;
-  material.alphaToCoverage = material.alphaTest > 0;
-  // Bark has no alpha cutout to dissolve through, so it needs conventional
-  // opacity. Foliage stays opaque/A2C to avoid crossed-plane sorting halos.
-  material.transparent = material.alphaTest <= 0;
-  material.depthWrite = true;
+  material.alphaToCoverage = false;
+  material.transparent = true;
+  material.depthWrite = false;
   material.userData.seedThreeOverviewBillboardFade = true;
   material.needsUpdate = true;
   return material;
 }
 
 /** Clone the cached forest bark material so fading overview branches cannot fade near trees. */
-export function createSeedThreeOverviewBarkFadeMaterial(
+export function createSeedThreeOverviewFadeMaterial(
   source: THREE.Material,
 ): THREE.Material {
   const material = source.clone();
@@ -78,6 +75,13 @@ export function createSeedThreeOverviewBarkFadeMaterial(
     'roughnessNode',
     'metalnessNode',
     'positionNode',
+    'opacityNode',
+    'thicknessColorNode',
+    'thicknessDistortionNode',
+    'thicknessAmbientNode',
+    'thicknessAttenuationNode',
+    'thicknessPowerNode',
+    'thicknessScaleNode',
   ]) {
     const value = Reflect.get(source, property);
     if (value !== undefined) Reflect.set(material, property, value);
@@ -85,6 +89,9 @@ export function createSeedThreeOverviewBarkFadeMaterial(
   material.userData.seedThreeOwnedOverviewFadeMaterial = true;
   return applySeedThreeOverviewBillboardFade(material);
 }
+
+/** Clone the cached forest bark material so fading overview branches cannot fade near trees. */
+export const createSeedThreeOverviewBarkFadeMaterial = createSeedThreeOverviewFadeMaterial;
 
 export function setSeedThreeOverviewBillboardFadeOpacity(opacity: number): void {
   overviewBillboardFadeOpacity.value = Math.max(
