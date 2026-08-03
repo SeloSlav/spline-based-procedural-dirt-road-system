@@ -1332,6 +1332,37 @@ export function setSeedThreeForestDeciduousFoliage(
   }
 }
 
+export function updateSeedThreeForestOverviewBillboardFade(
+  forest: SeedThreeForestInstances,
+  cameraDistance: number,
+  firstPersonActive: boolean,
+  deltaSeconds: number,
+): boolean {
+  const previous = forest.overviewBillboardFade;
+  const zoomPercent = Number.isFinite(cameraDistance) && cameraDistance > 0
+    ? (BASELINE_ORBIT_DISTANCE / cameraDistance) * 100
+    : 100;
+  const next = updateSeedThreeOverviewBillboardFade(
+    previous,
+    zoomPercent,
+    deltaSeconds,
+    firstPersonActive,
+  );
+  forest.overviewBillboardFade = {
+    enabled: next.enabled,
+    opacity: next.opacity,
+  };
+  setSeedThreeOverviewBillboardFadeOpacity(next.opacity);
+  const visibilityChanged = forest.overviewBillboardGroup.visible !== next.visible;
+  forest.overviewBillboardGroup.visible = next.visible;
+  forest.overviewBillboardGroup.userData.fadeEnabled = next.enabled;
+  forest.overviewBillboardGroup.userData.fadeOpacity = next.opacity;
+  forest.overviewBillboardGroup.userData.fadeTargetOpacity = next.targetOpacity;
+  return visibilityChanged
+    || previous.enabled !== next.enabled
+    || Math.abs(previous.opacity - next.opacity) > 1e-4;
+}
+
 export function disposeSeedThreeForest(forest: SeedThreeForestInstances): void {
   forest.group.traverse((object: THREE.Object3D) => {
     const mesh = object as THREE.InstancedMesh;
@@ -1339,6 +1370,7 @@ export function disposeSeedThreeForest(forest: SeedThreeForestInstances): void {
     if (mesh.geometry.userData.forestClone) mesh.geometry.dispose();
     mesh.dispose();
   });
+  for (const material of forest.ownedOverviewFadeMaterials) material.dispose();
 }
 
 export function createSeedThreeForestController(forest: SeedThreeForestInstances): SeedThreeForestController {
@@ -1348,23 +1380,31 @@ export function createSeedThreeForestController(forest: SeedThreeForestInstances
     commit: () => commitSeedThreeForestMatrices(forest),
     updateCamera: (
       camera,
-      _cameraDistance,
+      cameraDistance,
       firstPersonActive,
       casterBounds,
       cameraInteractionActive,
+      deltaSeconds = 1 / 60,
     ) => {
       // The selector retains a 26 m screen-space world envelope plus the full
       // fitted directional-shadow caster envelope. It affects inclusion only:
       // every retained tree keeps its authored static LOD and crown state. Its
       // species buffers commit atomically, so no partially rewritten tree can
       // reach a render pass.
-      return updateSeedThreeForestCamera(
+      const fadeChanged = updateSeedThreeForestOverviewBillboardFade(
+        forest,
+        cameraDistance,
+        firstPersonActive,
+        deltaSeconds,
+      );
+      const selectionChanged = updateSeedThreeForestCamera(
         forest,
         camera,
         firstPersonActive,
         casterBounds,
         cameraInteractionActive,
       );
+      return fadeChanged || selectionChanged;
     },
     getStructuralStats: () => getSeedThreeForestStructuralStats(forest),
     setDeciduousFoliage: (presentation) =>

@@ -36,6 +36,9 @@ const ROAD_CLEAR_MARGIN = 1.35;
 
 class RoadNetworkEditorApp {
   private readonly root: HTMLElement;
+  private readonly viewport: HTMLElement;
+  private readonly zoomLabel: HTMLElement;
+  private readonly buildButton: HTMLButtonElement;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2_600);
   private readonly renderer: SupportedRenderer;
@@ -62,6 +65,7 @@ class RoadNetworkEditorApp {
   private readonly frameSamples: number[] = [];
   private readonly cpuSamples: number[] = [];
   private readonly renderSubmitSamples: number[] = [];
+  private lastZoomPercent = Number.NaN;
   private lastTopologyRevision = -1;
   private roadState: RoadEditorState = {
     enabled: true,
@@ -94,8 +98,10 @@ class RoadNetworkEditorApp {
     this.renderer = rendererBackend.renderer;
     document.documentElement.dataset.rendererBackend = rendererBackend.kind;
     this.root.innerHTML = pageTemplate();
-    const viewport = this.mustFind<HTMLElement>('[data-viewport]');
-    viewport.prepend(this.renderer.domElement);
+    this.viewport = this.mustFind<HTMLElement>('[data-viewport]');
+    this.zoomLabel = this.mustFind<HTMLElement>('[data-zoom]');
+    this.buildButton = this.mustFind<HTMLButtonElement>('[data-build]');
+    this.viewport.prepend(this.renderer.domElement);
     this.renderer.domElement.setAttribute('aria-label', 'Interactive three-dimensional road building map');
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     this.renderer.shadowMap.enabled = true;
@@ -319,7 +325,7 @@ class RoadNetworkEditorApp {
   private bindUi(): void {
     this.mustFind<HTMLButtonElement>('[data-tool-road]').addEventListener('click', () => this.toggleTool('road'));
     this.mustFind<HTMLButtonElement>('[data-tool-residence]').addEventListener('click', () => this.toggleTool('residence'));
-    this.mustFind<HTMLButtonElement>('[data-build]').addEventListener('click', () => {
+    this.buildButton.addEventListener('click', () => {
       if (this.residenceTool.isEnabled()) this.residenceTool.commit();
       else this.roadEditor.commit();
     });
@@ -384,7 +390,7 @@ class RoadNetworkEditorApp {
       : this.roadState.previewBridges > 0
         ? `${this.roadState.previewBridges} automatic timber bridge${this.roadState.previewBridges === 1 ? '' : 's'} in this route`
         : 'Roads snap to nearby white circles on roads and residences';
-    const build = this.mustFind<HTMLButtonElement>('[data-build]');
+    const build = this.buildButton;
     const canBuild = residenceActive ? this.residenceState.canBuild : this.roadState.canBuild;
     build.disabled = !canBuild;
     build.hidden = !canBuild;
@@ -420,7 +426,7 @@ class RoadNetworkEditorApp {
   };
 
   private syncBuildButtonPosition(): void {
-    const build = this.mustFind<HTMLButtonElement>('[data-build]');
+    const build = this.buildButton;
     if (!this.roadEditor || !this.residenceTool) {
       build.hidden = true;
       return;
@@ -437,8 +443,7 @@ class RoadNetworkEditorApp {
       return;
     }
 
-    const viewport = this.mustFind<HTMLElement>('[data-viewport]');
-    const viewportRect = viewport.getBoundingClientRect();
+    const viewportRect = this.viewport.getBoundingClientRect();
     const size = 44;
     const margin = 10;
     const gap = 12;
@@ -475,8 +480,12 @@ class RoadNetworkEditorApp {
     );
     this.grass?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
     this.riverReeds?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
-    this.mustFind<HTMLElement>('[data-zoom]').textContent = `${Math.round(this.cameraController.getZoomPercent())}%`;
-    this.syncBuildButtonPosition();
+    const zoomPercent = Math.round(this.cameraController.getZoomPercent());
+    if (zoomPercent !== this.lastZoomPercent) {
+      this.lastZoomPercent = zoomPercent;
+      this.zoomLabel.textContent = `${zoomPercent}%`;
+    }
+    if (!this.buildButton.disabled) this.syncBuildButtonPosition();
     const renderStartedAt = performance.now();
     this.renderer.render(this.scene, this.camera);
     this.publishFrameDiagnostics(

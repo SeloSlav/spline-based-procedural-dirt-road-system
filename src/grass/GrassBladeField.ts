@@ -362,8 +362,6 @@ export async function createGrassBladeField(
     return dx * dx + dz * dz <= includeRadiusSq;
   };
 
-  const gridIndex = (localX: number, localZ: number): number => localZ * GRID_SIDE + localX;
-
   const worldChunkAt = (centerChunkX: number, centerChunkZ: number, localX: number, localZ: number) => ({
     chunkX: centerChunkX + localX - GRASS_STREAM_CHUNK_RADIUS,
     chunkZ: centerChunkZ + localZ - GRASS_STREAM_CHUNK_RADIUS,

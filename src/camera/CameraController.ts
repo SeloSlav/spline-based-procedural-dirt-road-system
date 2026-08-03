@@ -174,6 +174,11 @@ export class CameraController {
 
   update(dt: number): void {
     if (!this.inputEnabled) return;
+    const navigationActive = this.isNavigationActive();
+    if (!navigationActive) {
+      this.applyCursor();
+      return;
+    }
     const scale = this.getPanScale();
     const panSpeed = KEY_PAN_SPEED * scale * dt;
     if (this.keys.has('w') || this.keys.has('arrowup')) this.pan(0, panSpeed);
