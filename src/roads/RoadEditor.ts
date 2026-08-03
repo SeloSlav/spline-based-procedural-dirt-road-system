@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import type { FixedMap } from '../terrain/FixedMap.ts';
-import { maxWetRunLength, MAX_BRIDGE_SPAN_LENGTH } from './RiverBridgeSpans.ts';
 import type { RoadNetwork, RoadNetworkSnapshot } from './RoadNetwork.ts';
 import type { RoadRenderer } from './RoadRenderer.ts';
 import {
@@ -321,15 +320,9 @@ export class RoadEditor {
     const sampledCommitPath = this.renderer.sampleTerrainPath(commitPath);
     const length = pathLength(sampledCommitPath);
     const provisionalPreview = this.renderer.updatePreview(path, true);
-    const wetRun = maxWetRunLength(
-      sampledCommitPath,
-      (x, z) => this.map.riverLayout.isWaterAt(x, z),
-    );
     this.canBuild = this.anchors.length >= 2
-      && length >= MIN_COMMIT_LENGTH
-      && wetRun <= MAX_BRIDGE_SPAN_LENGTH;
-    if (wetRun > MAX_BRIDGE_SPAN_LENGTH) this.statusMessage = 'Crossing is too wide for a timber bridge';
-    else if (this.anchors.length < 2) this.statusMessage = 'Click to set the next point';
+      && length >= MIN_COMMIT_LENGTH;
+    if (this.anchors.length < 2) this.statusMessage = 'Click to set the next point';
     else if (length < MIN_COMMIT_LENGTH) this.statusMessage = 'Road segment is too short';
     else this.statusMessage = 'Click for another point, or choose the hammer / press Enter to build';
     const preview = this.canBuild

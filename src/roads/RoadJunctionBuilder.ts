@@ -199,7 +199,17 @@ export class RoadJunctionBuilder {
 
     for (const local of contour) {
       const point = new THREE.Vector3(center.x + local.x, center.y, center.z + local.y);
-      this.pushJunctionVertex(positions, uvs, point, center, textureDirection, texturePerp, CORE_Y_OFFSET, 0.5);
+      const lateral = local.x * texturePerp.x + local.y * texturePerp.z;
+      this.pushJunctionVertex(
+        positions,
+        uvs,
+        point,
+        center,
+        textureDirection,
+        texturePerp,
+        CORE_Y_OFFSET,
+        0.5 + lateral / width,
+      );
     }
     for (let index = 0; index < contour.length; index++) {
       const current = index + 1;
@@ -272,7 +282,7 @@ export class RoadJunctionBuilder {
     textureDirection: THREE.Vector3,
     texturePerp: THREE.Vector3,
     yOffset: number,
-    fadeU: number,
+    textureU: number,
   ): void {
     const dx = point.x - center.x;
     const dz = point.z - center.z;
@@ -283,7 +293,7 @@ export class RoadJunctionBuilder {
       uvs,
       point,
       yOffset,
-      fadeU,
+      textureU,
       0.5 + along / 5.8 + lateral * 0.025,
     );
   }
