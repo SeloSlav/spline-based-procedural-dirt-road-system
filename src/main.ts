@@ -17,6 +17,12 @@ import { createRiverReeds, type RiverReedField } from './rivers/RiverReeds.ts';
 import { createRiverShoreStones } from './rivers/RiverShoreStones.ts';
 import { createRiverWaterMesh, type RiverWaterController } from './rivers/RiverWaterMesh.ts';
 import { createPreferredRenderer, type RendererBackend, type SupportedRenderer } from './scene/RendererBackend.ts';
+import {
+  computeViewShadowBounds,
+  fitDirectionalLightShadow,
+  intersectTerrainBounds,
+} from './scene/fitDirectionalShadow.ts';
+import { TREE_SHADOW_CAST_LAYER } from './scene/SceneLayers.ts';
 import { setWorldAnimationTime } from './scene/worldAnimationTime.ts';
 import { FixedMap, PLAYABLE_SIZE, TERRAIN_SIZE, WORLD_SEED } from './terrain/FixedMap.ts';
 import type { Terrain } from './terrain/Terrain.ts';
@@ -33,6 +39,7 @@ import './style.css';
 
 const TREE_SEED = 0x5eedf0a5;
 const ROAD_CLEAR_MARGIN = 1.35;
+const STATIC_SUN_DIRECTION = new THREE.Vector3(-127.28, 131.63, -127.28).normalize();
 
 class RoadNetworkEditorApp {
   private readonly root: HTMLElement;
@@ -54,6 +61,7 @@ class RoadNetworkEditorApp {
   private readonly residenceTool: ResidenceTool;
   private readonly interactionOverlay = new THREE.Group();
   private readonly cameraController: CameraController;
+  private readonly sunLight: THREE.DirectionalLight;
   private readonly terrainSurface: Terrain;
   private readonly riverField: RiverField;
   private readonly riverGroup = new THREE.Group();
@@ -66,6 +74,13 @@ class RoadNetworkEditorApp {
   private readonly frameSamples: number[] = [];
   private readonly cpuSamples: number[] = [];
   private readonly renderSubmitSamples: number[] = [];
+  private readonly viewShadowBounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
+  private readonly shadowBounds = { minX: 0, maxX: 0, minZ: 0, maxZ: 0 };
+  private shadowRefreshRequested = true;
+  private lastShadowTargetX = Number.NaN;
+  private lastShadowTargetZ = Number.NaN;
+  private lastShadowDistance = Number.NaN;
+  private renderFrame = 0;
   private lastZoomPercent = Number.NaN;
   private lastTopologyRevision = -1;
   private roadState: RoadEditorState = {
@@ -112,7 +127,7 @@ class RoadNetworkEditorApp {
 
     this.scene.background = new THREE.Color(0x78929d);
     this.scene.fog = new THREE.FogExp2(0x879da3, 0.00072);
-    this.addLighting();
+    this.sunLight = this.addLighting();
     this.riverField = RiverField.fromLayout({
       bounds: this.map.bounds,
       layout: this.map.riverLayout,
@@ -211,27 +226,24 @@ class RoadNetworkEditorApp {
     void this.loadSourceEnvironment();
   }
 
-  private addLighting(): void {
+  private addLighting(): THREE.DirectionalLight {
     const hemisphere = new THREE.HemisphereLight(0xd9e8ec, 0x59634f, 1.55);
     const ambient = new THREE.AmbientLight(0xb8c8d2, 0.18);
     const sun = new THREE.DirectionalLight(0xffefd2, 5.2);
     sun.name = 'Sun';
-    sun.position.set(-127.28, 131.63, -127.28);
+    sun.position.copy(STATIC_SUN_DIRECTION).multiplyScalar(180);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -440;
-    sun.shadow.camera.right = 440;
-    sun.shadow.camera.top = 440;
-    sun.shadow.camera.bottom = -440;
-    sun.shadow.camera.near = 1;
-    sun.shadow.camera.far = 900;
     sun.shadow.bias = -0.00008;
     sun.shadow.normalBias = 0.008;
     sun.shadow.radius = 1.8;
+    sun.shadow.autoUpdate = false;
+    sun.shadow.camera.layers.enable(TREE_SHADOW_CAST_LAYER);
     const fill = new THREE.DirectionalLight(0xa8c6d8, 0.34);
     fill.name = 'Sky fill';
     fill.position.set(63.64, -0.82, 63.64);
-    this.scene.add(hemisphere, ambient, sun, fill);
+    this.scene.add(hemisphere, ambient, sun, sun.target, fill);
+    return sun;
   }
 
   private async loadSourceEnvironment(): Promise<void> {
@@ -320,6 +332,30 @@ class RoadNetworkEditorApp {
   }
 
   private requestShadowRefresh(): void {
+    this.shadowRefreshRequested = true;
+    const shadowMap = this.renderer.shadowMap as typeof this.renderer.shadowMap & { needsUpdate?: boolean };
+    if ('needsUpdate' in shadowMap) shadowMap.needsUpdate = true;
+  }
+
+  private shouldRefitShadowMap(cameraDistance: number): boolean {
+    if (this.shadowRefreshRequested || !Number.isFinite(this.lastShadowTargetX)) return true;
+    if (this.renderFrame % 5 !== 0) return false;
+    const dx = this.cameraTarget.x - this.lastShadowTargetX;
+    const dz = this.cameraTarget.z - this.lastShadowTargetZ;
+    if (Math.hypot(dx, dz) > 14) return true;
+    return Math.abs(cameraDistance - this.lastShadowDistance) > 12;
+  }
+
+  private refitShadowMap(cameraDistance: number): void {
+    fitDirectionalLightShadow(this.sunLight, {
+      bounds: this.shadowBounds,
+      sunOffsetDir: STATIC_SUN_DIRECTION,
+    });
+    this.lastShadowTargetX = this.cameraTarget.x;
+    this.lastShadowTargetZ = this.cameraTarget.z;
+    this.lastShadowDistance = cameraDistance;
+    this.shadowRefreshRequested = false;
+    this.sunLight.shadow.needsUpdate = true;
     const shadowMap = this.renderer.shadowMap as typeof this.renderer.shadowMap & { needsUpdate?: boolean };
     if ('needsUpdate' in shadowMap) shadowMap.needsUpdate = true;
   }
@@ -424,6 +460,7 @@ class RoadNetworkEditorApp {
     this.camera.aspect = width / Math.max(1, height);
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height, false);
+    this.requestShadowRefresh();
     this.syncBuildButtonPosition();
   };
 
@@ -471,15 +508,35 @@ class RoadNetworkEditorApp {
     setWorldAnimationTime(this.clock.elapsedTime);
     this.riverWater?.tick(dt, this.clock.elapsedTime);
     const cameraDistance = this.cameraController.getOrbitDistance();
+    const viewShadowBounds = computeViewShadowBounds(
+      this.camera,
+      this.cameraTarget,
+      cameraDistance,
+      1.24,
+      this.viewShadowBounds,
+    );
+    const shadowBounds = intersectTerrainBounds(
+      viewShadowBounds,
+      this.map.bounds,
+      this.shadowBounds,
+    );
     updateTerrainZoomBlend(this.terrainSurface, cameraDistance, false);
-    this.forestController?.updateCamera(
+    const forestMatrixWritesBefore = this.forest?.updateTelemetry.matrixWrites ?? 0;
+    const forestChanged = this.forestController?.updateCamera(
       this.camera,
       cameraDistance,
       false,
-      this.map.bounds,
+      shadowBounds,
       this.cameraController.isNavigationActive(),
       dt,
     );
+    // Billboard opacity changes are color-only. Redraw the static atlas only
+    // when compaction actually changes the tree matrices submitted to it.
+    if (
+      forestChanged
+      && this.forest
+      && this.forest.updateTelemetry.matrixWrites !== forestMatrixWritesBefore
+    ) this.requestShadowRefresh();
     this.grass?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
     this.riverReeds?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
     const zoomPercent = Math.round(this.cameraController.getZoomPercent());
@@ -488,6 +545,8 @@ class RoadNetworkEditorApp {
       this.zoomLabel.textContent = `${zoomPercent}%`;
     }
     if (!this.buildButton.disabled) this.syncBuildButtonPosition();
+    this.renderFrame++;
+    if (this.shouldRefitShadowMap(cameraDistance)) this.refitShadowMap(cameraDistance);
     const renderStartedAt = performance.now();
     this.renderer.render(this.scene, this.camera);
     this.publishFrameDiagnostics(

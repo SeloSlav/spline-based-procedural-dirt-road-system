@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
-const PLAYABLE_SIZE = 310;
 const TERRAIN_SIZE = 408.5;
+const PLAYABLE_SIZE = TERRAIN_SIZE;
 
 export function sampleTerrainBlendWeights(x: number, z: number): [number, number, number] {
   const warpX = fbm(x * 0.006 + 41.1, z * 0.006 - 17.8, 4) * 22;

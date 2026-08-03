@@ -5,8 +5,9 @@ import { sampleTerrainBlendWeights, sampleTerrainUv } from './TerrainBlendWeight
 import type { TerrainBounds } from './Terrain.ts';
 
 export const WORLD_SEED = 0x4a11ce5d;
-export const PLAYABLE_SIZE = 310;
 export const TERRAIN_SIZE = 408.5;
+/** Every rendered part of the terrain is playable; there is no decorative-only edge ring. */
+export const PLAYABLE_SIZE = TERRAIN_SIZE;
 export const TERRAIN_HALF = TERRAIN_SIZE * 0.5;
 export const MAP_BOUNDS: TerrainBounds = {
   minX: -TERRAIN_HALF,

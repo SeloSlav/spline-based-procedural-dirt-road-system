@@ -39,9 +39,10 @@ type SeedThreeOpacityNodeMaterial = THREE.Material & {
 const overviewBillboardFadeOpacity = uniform(0) as { value: number } & TslNode;
 
 /**
- * Use stable hashed coverage for the overview-card transition. Alpha blending
- * produces sorting halos across thousands of crossed foliage planes, while a
- * hash fade preserves depth and turns the opacity ramp into natural leaf loss.
+ * Dissolve overview cards through their authored alpha cutout. Alpha hashing
+ * changes its sub-pixel pattern as the camera moves and reads as whole-tree
+ * flicker; alpha-to-coverage keeps the transition stable under the renderer's
+ * MSAA while preserving depth writes for crossed foliage planes.
  */
 export function applySeedThreeOverviewBillboardFade(
   material: THREE.Material,
@@ -50,10 +51,11 @@ export function applySeedThreeOverviewBillboardFade(
   const target = material as SeedThreeOpacityNodeMaterial;
   const baseOpacity = target.opacityNode ?? (float(1) as TslNode);
   target.opacityNode = baseOpacity.mul(overviewBillboardFadeOpacity);
-  material.alphaTest = 0;
-  material.alphaHash = true;
-  material.alphaToCoverage = false;
-  material.transparent = false;
+  material.alphaHash = false;
+  material.alphaToCoverage = material.alphaTest > 0;
+  // Bark has no alpha cutout to dissolve through, so it needs conventional
+  // opacity. Foliage stays opaque/A2C to avoid crossed-plane sorting halos.
+  material.transparent = material.alphaTest <= 0;
   material.depthWrite = true;
   material.userData.seedThreeOverviewBillboardFade = true;
   material.needsUpdate = true;

@@ -56,6 +56,7 @@ import {
 } from './seedThreeForestMaterial.ts';
 import { BASELINE_ORBIT_DISTANCE } from '../../camera/CameraCurves.ts';
 import {
+  shouldUseSeedThreeOverviewNearReplacement,
   updateSeedThreeOverviewBillboardFade,
   type SeedThreeOverviewBillboardFadeState,
 } from './seedThreeOverviewBillboardFade.ts';
@@ -110,6 +111,7 @@ export type SeedThreeForestInstances = {
   } | null;
   visibilityDirty: boolean;
   cameraInteractionActive: boolean;
+  forceOverviewNearActive: boolean;
   overviewBillboardFade: SeedThreeOverviewBillboardFadeState;
   ownedOverviewFadeMaterials: THREE.Material[];
   updateTelemetry: SeedThreeForestUpdateTelemetry;
@@ -192,7 +194,10 @@ const FOREST_LOD_OPTS = {
 
 const FOREST_NEAR_DISTANCE = 108;
 const FOREST_FIRST_PERSON_NEAR_DISTANCE = 132;
-const FOREST_VISIBILITY_PADDING = 0;
+// Match the movement-safe envelope used by medieval-road-system. A zero-width
+// envelope lets trees cross the custom frustum between selector evaluations,
+// producing visible one-frame holes while the camera pans or rotates.
+const FOREST_VISIBILITY_PADDING = 26;
 const FOREST_UPDATE_BOOKKEEPING_HEADROOM_MS = 0.35;
 const FOREST_CONTINUOUS_UPDATE_BUDGET_MS = 2.75;
 const FOREST_MATRIX_WRITES_PER_CHUNK = 128;
@@ -345,10 +350,15 @@ function createInstancedLodSet(
           userData: Record<string, unknown>;
         };
         im.name = `${debugName} cards`;
-        im.castShadow = castShadow;
+        // Crown underlays are large crossed canopy-fill quads. They improve the
+        // color silhouette, but their baked alpha is not preserved by the
+        // WebGPU shadow variant and turns into the map-edge rectangles seen on
+        // the terrain. Real branch and foliage cards still cast the tree shape.
+        const castsTreeSilhouette = castShadow && !crownUnderlay;
+        im.castShadow = castsTreeSilhouette;
         im.receiveShadow = true;
         im.frustumCulled = false;
-        im.userData.neverCastShadow = !castShadow;
+        im.userData.neverCastShadow = !castsTreeSilhouette;
         im.userData.src = instanced;
         im.userData.k = cardsPerTree;
         im.userData.crownUnderlay = crownUnderlay;
@@ -707,6 +717,7 @@ export async function createSeedThreeForest(
     pendingLodWork: null,
     visibilityDirty: false,
     cameraInteractionActive: false,
+    forceOverviewNearActive: false,
     overviewBillboardFade: { enabled: false, opacity: 0 },
     ownedOverviewFadeMaterials: [...ownedOverviewFadeMaterials],
     updateTelemetry: createSeedThreeUpdateTelemetry(),
@@ -776,6 +787,7 @@ export function updateSeedThreeForestCamera(
   firstPersonActive: boolean,
   casterBounds: { minX: number; maxX: number; minZ: number; maxZ: number },
   cameraInteractionActive = false,
+  forceOverviewNearActive = forest.forceOverviewNearActive,
 ): boolean {
   const result = updateSeedThreeForestCameraBudgeted(
     forest,
@@ -788,6 +800,7 @@ export function updateSeedThreeForestCamera(
       maxMatrixWritesPerChunk: FOREST_MATRIX_WRITES_PER_CHUNK,
       immediateWhenViewUncovered: true,
       cameraInteractionActive,
+      forceOverviewNearActive,
     },
   );
   return result.selectionChanged || result.bucketCompactions > 0;
@@ -808,13 +821,19 @@ export function updateSeedThreeForestCameraBudgeted(
     minimumCasterBoundsChange?: number;
     immediateWhenViewUncovered?: boolean;
     cameraInteractionActive?: boolean;
+    forceOverviewNearActive?: boolean;
   },
 ): SeedThreeForestBudgetedUpdateResult {
   const startedAt = performance.now();
   const cameraInteractionActive = options.cameraInteractionActive === true;
   const previousCameraInteractionActive = forest.cameraInteractionActive;
   forest.cameraInteractionActive = cameraInteractionActive;
+  const forceOverviewNearActive = options.forceOverviewNearActive
+    ?? forest.forceOverviewNearActive;
+  const lodPresentationChanged = forceOverviewNearActive !== forest.forceOverviewNearActive;
+  forest.forceOverviewNearActive = forceOverviewNearActive;
   const selection = selectForestLods(forest.visibilitySelector, camera, {
+    force: lodPresentationChanged,
     nearDistance: firstPersonActive
       ? FOREST_FIRST_PERSON_NEAR_DISTANCE
       : FOREST_NEAR_DISTANCE,
@@ -844,9 +863,9 @@ export function updateSeedThreeForestCameraBudgeted(
     forest.updateTelemetry.triggerReasons[reason] =
       (forest.updateTelemetry.triggerReasons[reason] ?? 0) + 1;
   }
-  if (selection.changed) {
+  if (selection.changed || lodPresentationChanged) {
     forest.updateTelemetry.selectionChanges += 1;
-    const desired = selectionsByBucket(forest, selection);
+    const desired = selectionsByBucket(forest, selection, forceOverviewNearActive);
     forest.pendingLodWork = {
       desired,
       pendingBucketIndices: forest.pendingLodWork?.pendingBucketIndices ?? [],
@@ -876,13 +895,19 @@ export function updateSeedThreeForestCameraBudgeted(
     );
     const requiresImmediateCoverage = protectVisibleCoverage
       && !residentSelectionCoversDesiredView;
-    const deferCoveredInteractionWork = protectVisibleCoverage
+    // A presentation change is a real LOD hand-off, not ordinary camera
+    // coverage churn. Complete it atomically even when the old resident set is
+    // a superset; otherwise the interaction planner can retain both rungs and
+    // leave overlapping cards to z-fight after zooming back out.
+    const deferCoveredInteractionWork = !lodPresentationChanged
+      && protectVisibleCoverage
       && interactionWork.deferCoveredWork;
-    const discardCoveredInteractionWork = protectVisibleCoverage
+    const discardCoveredInteractionWork = !lodPresentationChanged
+      && protectVisibleCoverage
       && interactionWork.discardCoveredWork;
-    const completeInteractionWorkImmediately = protectVisibleCoverage
-      && interactionWork.completeImmediately;
-    coverageImmediate = requiresImmediateCoverage;
+    const completeInteractionWorkImmediately = lodPresentationChanged
+      || (protectVisibleCoverage && interactionWork.completeImmediately);
+    coverageImmediate = requiresImmediateCoverage || lodPresentationChanged;
     if (discardCoveredInteractionWork) {
       work.pendingBucketIndices.length = 0;
       work.activeBucketJob = null;
@@ -1011,7 +1036,9 @@ export function updateSeedThreeForestCameraBudgeted(
   }
 
   if (bucketCompactions > 0) refreshSeedThreeRenderStats(forest);
-  if (selection.changed) forest.renderStats.revision = selection.revision;
+  if (selection.changed || lodPresentationChanged) {
+    forest.renderStats.revision = selection.revision;
+  }
   const durationMs = performance.now() - startedAt;
   forest.updateTelemetry.bucketCompactions += bucketCompactions;
   forest.updateTelemetry.maxBucketCompactionsPerUpdate = Math.max(
@@ -1039,7 +1066,7 @@ export function updateSeedThreeForestCameraBudgeted(
     durationMs,
   );
   return {
-    selectionChanged: selection.changed,
+    selectionChanged: selection.changed || lodPresentationChanged,
     selectorSkipped: selection.skipped,
     triggerReasons: [...selection.triggerReasons],
     bucketCompactions,
@@ -1076,6 +1103,7 @@ function selectionsByBucket(
     overviewIndices: readonly number[];
     viewIndices: readonly number[];
   },
+  includeForcedOverviewInNear = false,
 ): PassPartitionedBucketSelection[] {
   const desired = forest.buckets.map(() => ({
     near: [] as number[],
@@ -1091,6 +1119,7 @@ function selectionsByBucket(
         ? forest.buckets[mapping.bucketIndex]?.slots[mapping.slotIndex]?.forceOverview === true
         : false;
     },
+    includeForcedOverviewInNear,
   );
   for (let index = 0; index < staticLodPartition.nearIndices.length; index += 1) {
     const layoutIndex = staticLodPartition.nearIndices[index]!;
@@ -1337,7 +1366,7 @@ export function updateSeedThreeForestOverviewBillboardFade(
   cameraDistance: number,
   firstPersonActive: boolean,
   deltaSeconds: number,
-): boolean {
+): { changed: boolean; nearReplacementActive: boolean } {
   const previous = forest.overviewBillboardFade;
   const zoomPercent = Number.isFinite(cameraDistance) && cameraDistance > 0
     ? (BASELINE_ORBIT_DISTANCE / cameraDistance) * 100
@@ -1346,6 +1375,11 @@ export function updateSeedThreeForestOverviewBillboardFade(
     previous,
     zoomPercent,
     deltaSeconds,
+    firstPersonActive,
+  );
+  const nearReplacementActive = shouldUseSeedThreeOverviewNearReplacement(
+    forest.forceOverviewNearActive,
+    zoomPercent,
     firstPersonActive,
   );
   forest.overviewBillboardFade = {
@@ -1358,9 +1392,13 @@ export function updateSeedThreeForestOverviewBillboardFade(
   forest.overviewBillboardGroup.userData.fadeEnabled = next.enabled;
   forest.overviewBillboardGroup.userData.fadeOpacity = next.opacity;
   forest.overviewBillboardGroup.userData.fadeTargetOpacity = next.targetOpacity;
-  return visibilityChanged
-    || previous.enabled !== next.enabled
-    || Math.abs(previous.opacity - next.opacity) > 1e-4;
+  forest.overviewBillboardGroup.userData.nearReplacementActive = nearReplacementActive;
+  return {
+    nearReplacementActive,
+    changed: visibilityChanged
+      || previous.enabled !== next.enabled
+      || Math.abs(previous.opacity - next.opacity) > 1e-4,
+  };
 }
 
 export function disposeSeedThreeForest(forest: SeedThreeForestInstances): void {
@@ -1387,11 +1425,15 @@ export function createSeedThreeForestController(forest: SeedThreeForestInstances
       deltaSeconds = 1 / 60,
     ) => {
       // The selector retains a 26 m screen-space world envelope plus the full
-      // fitted directional-shadow caster envelope. It affects inclusion only:
-      // every retained tree keeps its authored static LOD and crown state. Its
-      // species buffers commit atomically, so no partially rewritten tree can
-      // reach a render pass.
-      const fadeChanged = updateSeedThreeForestOverviewBillboardFade(
+      // fitted directional-shadow caster envelope. Close zoom duplicates the
+      // authored overview slots into real LOD2 just before their cards dissolve;
+      // each species hand-off commits atomically.
+      const crownUnderlayChanged = updateSeedThreeCrownUnderlayVisibility(
+        forest,
+        cameraDistance,
+        firstPersonActive,
+      );
+      const fadeUpdate = updateSeedThreeForestOverviewBillboardFade(
         forest,
         cameraDistance,
         firstPersonActive,
@@ -1403,8 +1445,9 @@ export function createSeedThreeForestController(forest: SeedThreeForestInstances
         firstPersonActive,
         casterBounds,
         cameraInteractionActive,
+        fadeUpdate.nearReplacementActive,
       );
-      return fadeChanged || selectionChanged;
+      return crownUnderlayChanged || fadeUpdate.changed || selectionChanged;
     },
     getStructuralStats: () => getSeedThreeForestStructuralStats(forest),
     setDeciduousFoliage: (presentation) =>

@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 
-const RAILING_START_BLEND = 0.018;
+export const BRIDGE_RAILING_START_BLEND = 0.018;
 const BAY_SPACING_M = 2.25;
-const EDGE_INSET_M = 0.18;
+export const BRIDGE_RAILING_EDGE_INSET = 0.18;
 const POST_HEIGHT_M = 1.18;
 const POST_ANCHOR_DEPTH_M = 0.16;
 const POST_WIDTH_M = 0.18;
@@ -23,6 +23,13 @@ type RailingRun = {
   points: THREE.Vector3[];
 };
 
+export type BridgeRailingOptions = {
+  /** Open the railing where the start of this edge enters a shared junction. */
+  trimStart?: number;
+  /** Open the railing where the end of this edge enters a shared junction. */
+  trimEnd?: number;
+};
+
 /**
  * Builds sturdy timber guard rails from short surface-following bays. Posts
  * remain upright while each rail pitches and turns between neighboring deck
@@ -31,8 +38,21 @@ type RailingRun = {
 export function buildBridgeRailings(
   sections: readonly BridgeRailingSection[],
   material: THREE.Material,
+  options: BridgeRailingOptions = {},
 ): THREE.Group | null {
-  const runs = collectRailingRuns(sections);
+  const runs = collectRailingRuns(sections, options);
+  return buildTimberRailings(runs.map((run) => run.points), material);
+}
+
+/** Builds the same timber railing style along arbitrary open polylines. */
+export function buildTimberRailings(
+  paths: readonly (readonly THREE.Vector3[])[],
+  material: THREE.Material,
+  name = 'Bridge railings',
+): THREE.Group | null {
+  const runs = paths
+    .map((path) => ({ points: resamplePolyline(path, BAY_SPACING_M) }))
+    .filter((run) => run.points.length >= 2);
   if (runs.length === 0) return null;
 
   const postCount = runs.reduce((total, run) => total + run.points.length, 0);
@@ -43,7 +63,7 @@ export function buildBridgeRailings(
   if (postCount === 0 || railCount === 0) return null;
 
   const group = new THREE.Group();
-  group.name = 'Bridge railings';
+  group.name = name;
   group.userData.fpCollisionAllowStep = false;
 
   const posts = new THREE.InstancedMesh(
@@ -148,12 +168,13 @@ export function buildBridgeRailings(
 
 function collectRailingRuns(
   sections: readonly BridgeRailingSection[],
+  options: BridgeRailingOptions,
 ): RailingRun[] {
   const runs: RailingRun[] = [];
   let index = 0;
 
   while (index < sections.length) {
-    if (sections[index].bridgeBlend <= RAILING_START_BLEND) {
+    if (sections[index].bridgeBlend <= BRIDGE_RAILING_START_BLEND) {
       index += 1;
       continue;
     }
@@ -161,7 +182,7 @@ function collectRailingRuns(
     const activeStart = index;
     while (
       index < sections.length
-      && sections[index].bridgeBlend > RAILING_START_BLEND
+      && sections[index].bridgeBlend > BRIDGE_RAILING_START_BLEND
     ) {
       index += 1;
     }
@@ -175,7 +196,12 @@ function collectRailingRuns(
       const sidePath = activeSections.map((section) => (
         insetDeckEdge(section[side], section.center)
       ));
-      const points = resamplePolyline(sidePath, BAY_SPACING_M);
+      const trimmedPath = trimPolyline(
+        sidePath,
+        activeStart === 0 ? options.trimStart ?? 0 : 0,
+        activeEnd === sections.length - 1 ? options.trimEnd ?? 0 : 0,
+      );
+      const points = trimmedPath.length >= 2 ? trimmedPath : [];
       if (points.length >= 2) runs.push({ points });
     }
   }
@@ -191,12 +217,36 @@ function insetDeckEdge(
   const dz = center.z - deckEdge.z;
   const distance = Math.hypot(dx, dz);
   if (distance <= 1e-6) return deckEdge.clone();
-  const inset = Math.min(EDGE_INSET_M, distance * 0.35);
+  const inset = Math.min(BRIDGE_RAILING_EDGE_INSET, distance * 0.35);
   return new THREE.Vector3(
     deckEdge.x + dx / distance * inset,
     deckEdge.y,
     deckEdge.z + dz / distance * inset,
   );
+}
+
+function trimPolyline(
+  path: readonly THREE.Vector3[],
+  trimStart: number,
+  trimEnd: number,
+): THREE.Vector3[] {
+  if (path.length < 2) return [];
+  if (trimStart <= 0 && trimEnd <= 0) return path.map((point) => point.clone());
+
+  const distances = cumulativeDistances(path);
+  const totalLength = distances[distances.length - 1];
+  const startDistance = Math.max(0, trimStart);
+  const endDistance = Math.min(totalLength, totalLength - Math.max(0, trimEnd));
+  if (endDistance - startDistance <= 1e-4) return [];
+
+  const result = [samplePolylineAtDistance(path, distances, startDistance)];
+  for (let index = 1; index < path.length - 1; index++) {
+    if (distances[index] > startDistance && distances[index] < endDistance) {
+      result.push(path[index].clone());
+    }
+  }
+  result.push(samplePolylineAtDistance(path, distances, endDistance));
+  return result;
 }
 
 function resamplePolyline(
@@ -205,10 +255,7 @@ function resamplePolyline(
 ): THREE.Vector3[] {
   if (path.length < 2) return [];
 
-  const distances = [0];
-  for (let index = 1; index < path.length; index++) {
-    distances.push(distances[index - 1] + path[index].distanceTo(path[index - 1]));
-  }
+  const distances = cumulativeDistances(path);
   const totalLength = distances[distances.length - 1];
   if (totalLength <= 1e-6) return [];
 
@@ -231,4 +278,32 @@ function resamplePolyline(
     result.push(path[segmentIndex].clone().lerp(path[segmentIndex + 1], t));
   }
   return result;
+}
+
+function cumulativeDistances(path: readonly THREE.Vector3[]): number[] {
+  const distances = [0];
+  for (let index = 1; index < path.length; index++) {
+    distances.push(distances[index - 1] + path[index].distanceTo(path[index - 1]));
+  }
+  return distances;
+}
+
+function samplePolylineAtDistance(
+  path: readonly THREE.Vector3[],
+  distances: readonly number[],
+  distance: number,
+): THREE.Vector3 {
+  let segmentIndex = 0;
+  while (
+    segmentIndex < path.length - 2
+    && distances[segmentIndex + 1] < distance
+  ) {
+    segmentIndex += 1;
+  }
+  const startDistance = distances[segmentIndex];
+  const endDistance = distances[segmentIndex + 1];
+  const t = endDistance <= startDistance
+    ? 0
+    : (distance - startDistance) / (endDistance - startDistance);
+  return path[segmentIndex].clone().lerp(path[segmentIndex + 1], t);
 }
