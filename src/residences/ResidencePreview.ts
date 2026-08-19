@@ -56,7 +56,7 @@ export class ResidencePreview {
   update(state: ResidencePreviewState): void {
     const { corners, outline, frontagePointCount, layout, getHeightAt } = state;
     this.group.visible = corners.length > 0 || outline.length > 0 || Boolean(state.hoverPoint);
-    this.setValidity(state.valid || state.stage < 4);
+    this.setValidity(state.valid || corners.length !== 4);
 
     if (corners.length === 4) {
       replaceGeometry(this.fill, createQuadFill(corners, getHeightAt, 0.105));

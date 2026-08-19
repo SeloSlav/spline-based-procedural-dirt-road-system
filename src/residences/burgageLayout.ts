@@ -1,4 +1,5 @@
 import {
+  distancePointToSegment2,
   isConvexQuad2,
   isPointInPolygon2,
   orientedRectCorners2,
@@ -44,7 +45,9 @@ export const MIN_PLOT_FRONTAGE = 8;
 export const HOUSE_SETBACK = 3.5;
 export const MAIN_HOUSE_WIDTH = 6.6;
 export const MAIN_HOUSE_DEPTH = 7.4;
-export const MIN_ZONE_DEPTH = MAIN_HOUSE_DEPTH + HOUSE_SETBACK + 2.5;
+/** Breathing room between the cottage wall and an independently placed rear boundary. */
+export const HOUSE_REAR_CLEARANCE = 0.5;
+export const MIN_ZONE_DEPTH = MAIN_HOUSE_DEPTH + HOUSE_SETBACK + HOUSE_REAR_CLEARANCE;
 // The source system supports productive gardens in this strip. This client-only
 // showcase deliberately keeps it as an empty rear yard.
 export const MAX_ZONE_DEPTH = MAIN_HOUSE_DEPTH + HOUSE_SETBACK + 12;
@@ -115,6 +118,11 @@ export function computeBurgageLayout(
     const rearLeft = rearSplits[index];
     const polygon = [frontLeft, frontRight, rearRight, rearLeft];
     if (distance(frontLeft, frontRight) < MIN_PLOT_FRONTAGE * 0.92) continue;
+    const parcelDepth = Math.min(
+      distancePointToSegment2(frontLeft, rearLeft, rearRight),
+      distancePointToSegment2(frontRight, rearLeft, rearRight),
+    );
+    if (parcelDepth < MIN_ZONE_DEPTH) continue;
 
     const frontMid = midpoint(frontLeft, frontRight);
     const frontDirection = normalize({
@@ -181,6 +189,44 @@ export function getParcelDividerSegments(layout: BurgageLayoutResult): Array<[Po
     segments.push([parcel.frontRight, parcel.rearRight]);
   }
   return segments;
+}
+
+/** Minimum usable depth between the authored frontage and rear boundary. */
+export function measureZoneDepth(
+  corners: BurgageZoneCorners,
+  frontageEdge: BurgageFrontageEdge,
+): number {
+  const [frontStart, frontEnd] = getZoneEdge(corners, frontageEdge);
+  const [rearStart, rearEnd] = getZoneEdge(corners, oppositeFrontageEdge(frontageEdge));
+  return Math.min(
+    distancePointToSegment2(frontStart, rearStart, rearEnd),
+    distancePointToSegment2(frontEnd, rearStart, rearEnd),
+  );
+}
+
+/** Perpendicular depth at each authored rear corner, preserving an angled rear boundary. */
+export function measureZoneSideDepths(
+  corners: BurgageZoneCorners,
+  frontageEdge: BurgageFrontageEdge,
+): [number, number] {
+  const [frontStart, frontEnd] = getZoneEdge(corners, frontageEdge);
+  const [rearEnd, rearStart] = getZoneEdge(corners, oppositeFrontageEdge(frontageEdge));
+  const frontDx = frontEnd.x - frontStart.x;
+  const frontDz = frontEnd.z - frontStart.z;
+  const frontLength = Math.hypot(frontDx, frontDz);
+  if (frontLength <= 1e-6) return [0, 0];
+
+  let normal = { x: -frontDz / frontLength, z: frontDx / frontLength };
+  const frontMid = midpoint(frontStart, frontEnd);
+  const rearMid = midpoint(rearStart, rearEnd);
+  if ((rearMid.x - frontMid.x) * normal.x + (rearMid.z - frontMid.z) * normal.z < 0) {
+    normal = { x: -normal.x, z: -normal.z };
+  }
+
+  return [
+    (rearStart.x - frontStart.x) * normal.x + (rearStart.z - frontStart.z) * normal.z,
+    (rearEnd.x - frontEnd.x) * normal.x + (rearEnd.z - frontEnd.z) * normal.z,
+  ];
 }
 
 export function zoneDepth(corners: BurgageZoneCorners): number {

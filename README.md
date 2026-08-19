@@ -29,7 +29,7 @@ A residence frontage tool lays out adjustable roadside plots and terrain-aligned
 - Left-click places spline control points
 - `Ctrl` + mouse wheel curves the pending segment
 - `Enter` builds the road
-- While placing houses: click two road-side frontage points, click behind them for depth, use `+`/`-` for plot count, then press `Enter`
+- While placing houses: click two road-side frontage points (they snap to the road), place both back corners independently, use `+`/`-` for plot count, then press `Enter`
 - `Esc` cancels the draft
 - `Ctrl/Cmd + Z` and `Ctrl/Cmd + Y` undo/redo
 - `WASD` pans, middle mouse rotates, mouse wheel zooms, and `Q`/`E` rotate

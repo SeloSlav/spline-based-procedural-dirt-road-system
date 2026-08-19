@@ -424,7 +424,7 @@ class RoadNetworkEditorApp {
     bridgeHint.classList.toggle('is-visible', !residenceActive && this.roadState.previewBridges > 0);
     bridgeHint.classList.toggle('is-residence', residenceActive);
     bridgeHint.textContent = residenceActive
-      ? 'Frontage snaps beside roads · cottages appear instantly'
+      ? 'First 2 points snap beside roads · place 2 back corners freely'
       : this.roadState.previewBridges > 0
         ? `${this.roadState.previewBridges} automatic timber bridge${this.roadState.previewBridges === 1 ? '' : 's'} in this route`
         : 'Roads snap to nearby white circles on roads and residences';

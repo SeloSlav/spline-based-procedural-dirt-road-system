@@ -9,6 +9,8 @@ import {
   MIN_PLOT_FRONTAGE,
   MIN_ZONE_DEPTH,
   cornersFromPoints,
+  measureZoneDepth,
+  measureZoneSideDepths,
   resolveBurgageLayout,
   suggestPlotCount,
   type BurgageLayoutResult,
@@ -60,6 +62,7 @@ export class ResidenceTool {
   private stage = 0;
   private frontagePoints: THREE.Vector3[] = [];
   private frontageCenters: THREE.Vector3[] = [];
+  private rearPoints: THREE.Vector3[] = [];
   private lockedSide: 1 | -1 | null = null;
   private hoverPoint: THREE.Vector3 | null = null;
   private hoverSnap: FrontageSnap | null = null;
@@ -250,20 +253,37 @@ export class ResidenceTool {
       this.stage = this.frontagePoints.length;
       this.statusMessage = this.stage === 1
         ? 'Click farther along the same road to set frontage width'
-        : `Click behind the frontage to set depth (${Math.round(MIN_ZONE_DEPTH)}–${Math.round(MAX_ZONE_DEPTH)} m)`;
+        : `Click the first back corner (${Math.round(MIN_ZONE_DEPTH)}–${Math.round(MAX_ZONE_DEPTH)} m from the road)`;
       this.refreshPreview();
       return;
     }
 
-    const rectangle = this.buildZone(hit);
-    if (!rectangle) {
+    const previous = this.rearPoints.at(-1) ?? this.frontagePoints.at(-1);
+    if (previous && distanceXZ(previous, hit) < MIN_POINT_DISTANCE) {
+      this.statusMessage = 'Move farther away before setting the next plot corner';
+      this.emitState();
+      return;
+    }
+
+    if (this.stage === 2) {
+      this.rearPoints = [hit.clone()];
+      this.stage = 3;
+      this.hoverPoint = null;
+      this.statusMessage = 'Click the other back corner to shape the angled rear boundary';
+      this.refreshPreview();
+      return;
+    }
+
+    const zone = this.buildZone(this.rearPoints[0], hit);
+    if (!zone) {
       this.statusMessage = `Frontage must be at least ${MIN_PLOT_FRONTAGE} m long`;
       this.emitState();
       return;
     }
-    this.corners = rectangle.corners;
-    this.outline = rectangle.outline;
-    this.frontagePointCount = rectangle.frontagePointCount;
+    this.rearPoints.push(hit.clone());
+    this.corners = zone.corners;
+    this.outline = zone.outline;
+    this.frontagePointCount = zone.frontagePointCount;
     this.stage = 4;
     this.plotCount = suggestPlotCount(distanceXZ(this.corners[0], this.corners[1]));
     this.plotCountTouched = false;
@@ -275,6 +295,7 @@ export class ResidenceTool {
     const hit = this.pick(event.clientX, event.clientY);
     this.hoverPoint = hit;
     this.hoverSnap = hit && this.stage < 2 ? this.snapBesideRoad(hit, this.lockedSide) : null;
+    if (hit && (this.stage === 2 || this.stage === 3)) this.updateBackCornerStatus(hit);
     this.refreshPreview();
   };
 
@@ -382,24 +403,45 @@ export class ResidenceTool {
       return;
     }
 
-    if (this.stage === 2 && this.hoverPoint) {
-      const zone = this.buildZone(this.hoverPoint);
+    if ((this.stage === 2 || this.stage === 3) && this.hoverPoint) {
+      const zone = this.stage === 2
+        ? this.buildZone(this.hoverPoint)
+        : this.buildZone(this.rearPoints[0], this.hoverPoint);
       if (zone) {
         const corners = cornersFromPoints(zone.corners.map(toPoint));
         const plotCount = corners ? suggestPlotCount(distanceXZ(zone.corners[0], zone.corners[1])) : 1;
         const layout = corners ? resolveBurgageLayout(corners, 0, plotCount) : null;
+        const depthMessage = corners ? this.validateDepth(corners) : null;
         this.preview.update({
           corners: zone.corners,
           outline: zone.outline,
           frontagePointCount: zone.frontagePointCount,
-          placedPoints: this.frontagePoints,
+          placedPoints: [...this.frontagePoints, ...this.rearPoints],
           hoverPoint: this.hoverPoint,
           layout,
-          stage: 2,
-          valid: Boolean(layout),
+          stage: this.stage,
+          valid: Boolean(layout) && !depthMessage,
           getHeightAt: this.map.getHeightAt.bind(this.map),
         });
       }
+    } else if (this.stage === 3) {
+      const frontEdge = this.resolveFrontagePath(
+        this.frontageCenters[0],
+        this.frontageCenters[1],
+        this.lockedSide ?? 1,
+      );
+      const partialCorners = [frontEdge[0], frontEdge.at(-1)!, ...this.rearPoints];
+      this.preview.update({
+        corners: partialCorners,
+        outline: [...frontEdge, ...this.rearPoints],
+        frontagePointCount: frontEdge.length,
+        placedPoints: [...this.frontagePoints, ...this.rearPoints],
+        hoverPoint: null,
+        layout: null,
+        stage: 3,
+        valid: true,
+        getHeightAt: this.map.getHeightAt.bind(this.map),
+      });
     }
     this.emitState();
   }
@@ -408,9 +450,12 @@ export class ResidenceTool {
     const corners = cornersFromPoints(this.corners.map(toPoint));
     this.layout = corners ? resolveBurgageLayout(corners, 0, this.plotCount) : null;
     if (this.layout && !this.plotCountTouched) this.plotCount = this.layout.plotCount;
-    this.validationMessage = !corners || !this.layout
-      ? 'Frontage is too short or the plots are too shallow'
-      : this.system.validatePlacement(corners, this.layout);
+    this.validationMessage = !corners
+      ? 'The four points must form a simple, convex residence plot'
+      : this.validateDepth(corners)
+        ?? (!this.layout
+          ? 'Frontage is too short or the angled plots are too shallow'
+          : this.system.validatePlacement(corners, this.layout));
     if (this.validationMessage) this.statusMessage = this.validationMessage;
     else if (this.layout) {
       const count = this.layout.residences.length;
@@ -434,7 +479,7 @@ export class ResidenceTool {
     this.emitState();
   }
 
-  private buildZone(backPoint: THREE.Vector3): {
+  private buildZone(firstRear: THREE.Vector3, secondRear?: THREE.Vector3): {
     corners: THREE.Vector3[];
     outline: THREE.Vector3[];
     frontagePointCount: number;
@@ -450,25 +495,56 @@ export class ResidenceTool {
     const frontEnd = frontEdge.at(-1)!;
     if (distanceXZ(frontStart, frontEnd) < MIN_PLOT_FRONTAGE * 0.5) return null;
 
-    const centerMid = midpoint3(this.frontageCenters[0], this.frontageCenters[1]);
-    const frontMid = midpoint3(frontStart, frontEnd);
-    let inward = new THREE.Vector3(frontMid.x - centerMid.x, 0, frontMid.z - centerMid.z);
-    if (inward.lengthSq() < 1e-4) {
-      const direction = new THREE.Vector3(frontEnd.x - frontStart.x, 0, frontEnd.z - frontStart.z).normalize();
-      inward = roadPerpendicular(direction).multiplyScalar(this.lockedSide ?? 1);
-    } else inward.normalize();
-    const rawDepth = (backPoint.x - frontMid.x) * inward.x + (backPoint.z - frontMid.z) * inward.z;
-    const depth = THREE.MathUtils.clamp(rawDepth, MIN_ZONE_DEPTH, MAX_ZONE_DEPTH);
-    const rearEdge = frontEdge.map((point) => this.map.getPointAt(
-      point.x + inward.x * depth,
-      point.z + inward.z * depth,
-    ));
-    const corners = [frontEdge[0], frontEdge.at(-1)!, rearEdge.at(-1)!, rearEdge[0]].map((point) => point.clone());
+    const inferredSecondRear = secondRear ?? this.map.getPointAt(
+      frontStart.x + (firstRear.x - frontEnd.x),
+      frontStart.z + (firstRear.z - frontEnd.z),
+    );
+    const corners = [
+      frontStart.clone(),
+      frontEnd.clone(),
+      firstRear.clone(),
+      inferredSecondRear.clone(),
+    ];
     return {
       corners,
-      outline: [...frontEdge.map((point) => point.clone()), ...rearEdge.slice().reverse().map((point) => point.clone())],
+      outline: [
+        ...frontEdge.map((point) => point.clone()),
+        firstRear.clone(),
+        inferredSecondRear.clone(),
+      ],
       frontagePointCount: frontEdge.length,
     };
+  }
+
+  private validateDepth(corners: BurgageZoneCorners): string | null {
+    const minimumDepth = measureZoneDepth(corners, 0);
+    if (minimumDepth < MIN_ZONE_DEPTH - 0.05) {
+      return `A back corner is too shallow — keep at least ${Math.round(MIN_ZONE_DEPTH)} m behind the road`;
+    }
+    const sideDepths = measureZoneSideDepths(corners, 0);
+    if (Math.max(...sideDepths) > MAX_ZONE_DEPTH + 0.05) {
+      return `A back corner is too deep — keep it within ${Math.round(MAX_ZONE_DEPTH)} m of the road`;
+    }
+    return null;
+  }
+
+  private updateBackCornerStatus(point: THREE.Vector3): void {
+    const anchorIndex = this.stage === 3 ? 0 : 1;
+    const front = this.frontagePoints[anchorIndex];
+    const center = this.frontageCenters[anchorIndex];
+    if (!front || !center) return;
+    const inward = new THREE.Vector3(front.x - center.x, 0, front.z - center.z);
+    if (inward.lengthSq() <= 1e-5) return;
+    inward.normalize();
+    const depth = (point.x - front.x) * inward.x + (point.z - front.z) * inward.z;
+    const corner = this.stage === 3 ? 'Second' : 'First';
+    if (depth < MIN_ZONE_DEPTH - 0.05) {
+      this.statusMessage = `${corner} back corner is too shallow — pull farther from the road (~${Math.round(MIN_ZONE_DEPTH)} m min)`;
+    } else if (depth > MAX_ZONE_DEPTH + 0.05) {
+      this.statusMessage = `${corner} back corner is too deep — move closer to the road (~${Math.round(MAX_ZONE_DEPTH)} m max)`;
+    } else {
+      this.statusMessage = `Click to set the ${corner.toLowerCase()} back corner (point ${this.stage + 1}/4 · ~${Math.round(depth)} m deep)`;
+    }
   }
 
   private snapBesideRoad(cursor: THREE.Vector3, lockedSide: 1 | -1 | null): FrontageSnap | null {
@@ -512,11 +588,15 @@ export class ResidenceTool {
 
   private undoDraftStep(): void {
     if (this.stage >= 4) {
-      this.stage = 2;
+      this.rearPoints.pop();
+      this.stage = 3;
       this.corners = [];
       this.outline = [];
       this.layout = null;
       this.validationMessage = null;
+    } else if (this.stage === 3) {
+      this.rearPoints.pop();
+      this.stage = 2;
     } else if (this.stage === 2) {
       this.frontagePoints.pop();
       this.frontageCenters.pop();
@@ -524,8 +604,10 @@ export class ResidenceTool {
     } else {
       this.cancelDraft(false);
     }
-    this.statusMessage = this.stage === 2
-      ? 'Click behind the frontage to set depth'
+    this.statusMessage = this.stage === 3
+      ? 'Click the other back corner to shape the angled rear boundary'
+      : this.stage === 2
+      ? 'Click the first back corner behind the frontage'
       : this.stage === 1
         ? 'Click farther along the road to set frontage width'
         : 'Click beside a road to start the residence frontage';
@@ -536,6 +618,7 @@ export class ResidenceTool {
     this.stage = 0;
     this.frontagePoints = [];
     this.frontageCenters = [];
+    this.rearPoints = [];
     this.lockedSide = null;
     this.hoverPoint = null;
     this.hoverSnap = null;
@@ -596,9 +679,11 @@ function tangentAndWidth(
     const edge = network.edges.get(edgeId);
     if (!edge) continue;
     const path = getEdgePath(edge);
+    // Keep the edge's canonical start-to-end tangent at both endpoints. Flipping
+    // it at the end node would also flip the meaning of the locked frontage side.
     const direction = edge.startNodeId === node.id
       ? tangentAt(path, 0)
-      : tangentAt(path, path.length - 2).multiplyScalar(-1);
+      : tangentAt(path, path.length - 2);
     tangent.add(direction);
     halfWidth = Math.max(halfWidth, edge.width * 0.5);
   }
@@ -682,10 +767,6 @@ function cumulativeDistances(path: THREE.Vector3[]): number[] {
     distances.push(distances[index - 1] + distanceXZ(path[index - 1], path[index]));
   }
   return distances;
-}
-
-function midpoint3(a: THREE.Vector3, b: THREE.Vector3): THREE.Vector3 {
-  return new THREE.Vector3((a.x + b.x) * 0.5, (a.y + b.y) * 0.5, (a.z + b.z) * 0.5);
 }
 
 function toPoint(point: THREE.Vector3): Point2 {
