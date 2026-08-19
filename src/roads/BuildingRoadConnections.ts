@@ -22,6 +22,36 @@ export type RoadNodeConnectionSource = {
   position: THREE.Vector3;
 };
 
+export type BuildingRoadConnection = {
+  id: string;
+  buildingId: string;
+  point: THREE.Vector3;
+};
+
+/** Exact midpoint anchors on each rotated residence footprint edge. */
+export function getBuildingRoadConnectionPoints(
+  building: BuildingRoadConnectionSource,
+  map: Pick<FixedMap, 'getPointAt'>,
+): BuildingRoadConnection[] {
+  const cos = Math.cos(building.yaw);
+  const sin = Math.sin(building.yaw);
+  const offsets = [
+    { x: 0, z: building.halfDepth },
+    { x: building.halfWidth, z: 0 },
+    { x: 0, z: -building.halfDepth },
+    { x: -building.halfWidth, z: 0 },
+  ];
+  return offsets.map((offset, index) => {
+    const x = building.x + offset.x * cos + offset.z * sin;
+    const z = building.z - offset.x * sin + offset.z * cos;
+    return {
+      id: `${building.id}:${index}`,
+      buildingId: building.id,
+      point: map.getPointAt(x, z),
+    };
+  });
+}
+
 type RuntimeConnection = {
   id: string;
   point: THREE.Vector3;
@@ -99,21 +129,11 @@ export class BuildingRoadConnections {
     const priorOpacity = new Map(this.connections.map((connection) => [connection.id, connection.opacity]));
     this.connections = [];
     buildings.forEach((building, buildingGroup) => {
-      const cos = Math.cos(building.yaw);
-      const sin = Math.sin(building.yaw);
-      const offsets = [
-        { x: 0, z: building.halfDepth },
-        { x: building.halfWidth, z: 0 },
-        { x: 0, z: -building.halfDepth },
-        { x: -building.halfWidth, z: 0 },
-      ];
-      offsets.forEach((offset, index) => {
-        const x = building.x + offset.x * cos + offset.z * sin;
-        const z = building.z - offset.x * sin + offset.z * cos;
-        const id = `${building.id}:${index}`;
+      getBuildingRoadConnectionPoints(building, this.map).forEach((connection) => {
+        const id = connection.id;
         this.connections.push({
           id: `building:${id}`,
-          point: this.map.getPointAt(x, z),
+          point: connection.point,
           revealGroup: `building:${buildingGroup}`,
           opacity: priorOpacity.get(`building:${id}`) ?? 0,
           distance: Infinity,

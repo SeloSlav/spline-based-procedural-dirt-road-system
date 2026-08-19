@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import type { RiverField } from '../rivers/RiverField.ts';
 import { getStillWaterSurfaceY } from '../rivers/RiverWaterLevel.ts';
 import type { Terrain } from '../terrain/Terrain.ts';
+import { BuildingAccessSpurs } from './BuildingAccessSpurs.ts';
+import type { BuildingRoadConnectionSource } from './BuildingRoadConnections.ts';
 import { applyBridgeHeightsToPath, detectBridgeSpans, type BridgeSamplingContext } from './RiverBridgeSpans.ts';
 import type { RoadMaterialFactory } from './RoadMaterialFactory.ts';
 import { RoadJunctionBuilder } from './RoadJunctionBuilder.ts';
@@ -15,9 +17,12 @@ const PREVIEW_Y_OFFSET = 0.2;
 export class RoadRenderer {
   readonly group = new THREE.Group();
   readonly previewGroup = new THREE.Group();
+  private readonly roadSurfaceGroup = new THREE.Group();
   private readonly network: RoadNetwork;
   private readonly meshBuilder: RoadMeshBuilder;
   private readonly junctionBuilder: RoadJunctionBuilder;
+  private readonly buildingAccessSpurs: BuildingAccessSpurs;
+  private buildingAccessSources: BuildingRoadConnectionSource[] = [];
   private readonly bridgeContext: BridgeSamplingContext;
   private bridgeCount = 0;
 
@@ -29,6 +34,8 @@ export class RoadRenderer {
   ) {
     this.network = network;
     this.group.name = 'Road network';
+    this.roadSurfaceGroup.name = 'Main road surfaces';
+    this.group.add(this.roadSurfaceGroup);
     this.previewGroup.name = 'Road preview';
     this.bridgeContext = {
       isWaterAt: (x, z) => riverField.isRenderedWetAt(x, z),
@@ -37,17 +44,28 @@ export class RoadRenderer {
     };
     this.meshBuilder = new RoadMeshBuilder(terrain, materials, this.bridgeContext);
     this.junctionBuilder = new RoadJunctionBuilder(terrain, materials);
+    this.buildingAccessSpurs = new BuildingAccessSpurs({
+      parent: this.group,
+      terrain,
+      meshBuilder: this.meshBuilder,
+    });
   }
 
   rebuild(): void {
-    disposeGroupChildren(this.group);
+    disposeGroupChildren(this.roadSurfaceGroup);
     this.bridgeCount = 0;
     for (const edge of this.network.edges.values()) {
       const mesh = this.meshBuilder.buildEdge(edge, this.network);
       this.bridgeCount += edge.materialData?.bridgeSpans?.length ?? 0;
-      this.group.add(mesh);
+      this.roadSurfaceGroup.add(mesh);
     }
-    this.group.add(this.junctionBuilder.build(this.network));
+    this.roadSurfaceGroup.add(this.junctionBuilder.build(this.network));
+    this.buildingAccessSpurs.sync(this.buildingAccessSources, this.network);
+  }
+
+  syncBuildingAccessRoads(buildings: Iterable<BuildingRoadConnectionSource>): void {
+    this.buildingAccessSources = [...buildings].map((building) => ({ ...building }));
+    this.buildingAccessSpurs.sync(this.buildingAccessSources, this.network);
   }
 
   updatePreview(

@@ -165,6 +165,7 @@ class RoadNetworkEditorApp {
       createRiverBankMeshes(this.terrainSurface, this.riverField, materials.riverBank),
     );
     this.residenceSystem = new ResidenceSystem(this.map);
+    this.roadRenderer.syncBuildingAccessRoads(this.residenceSystem.getRoadConnectionSources());
     this.interactionOverlay.name = 'Placement interaction overlays';
     this.scene.add(
       terrain,
@@ -198,6 +199,7 @@ class RoadNetworkEditorApp {
       previewParent: this.interactionOverlay,
       onStateChanged: (state) => this.renderResidenceState(state),
       onPlaced: () => {
+        this.roadRenderer.syncBuildingAccessRoads(this.residenceSystem.getRoadConnectionSources());
         this.syncSourceEnvironmentRoadClearance();
         this.requestShadowRefresh();
       },
