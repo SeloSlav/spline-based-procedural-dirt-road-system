@@ -1,0 +1,9 @@
+{
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "leadSeconds": 30.368,
+  "storySeconds": 30,
+  "musicPath": "C:/WebProjects/medieval-road-system/public/sounds/music/roads_and_rooftops.mp3",
+  "rawVideoPath": "C:\\WebProjects\\spline-based-procedural-dirt-road-system\\artifacts\\showcase\\road-system-showcase-raw.webm"
+}
