@@ -13,6 +13,7 @@ import {
   vec4,
 } from 'three/tsl';
 import { loadBitmapTexture } from '../../utils/textureLoad.ts';
+import { publicAssetUrl } from '../../utils/publicAssetUrl.ts';
 import { createPinnedGrassWindPosition } from './seedThreeGrass.ts';
 
 type TslNode = {
@@ -39,8 +40,8 @@ const tsl = {
 
 const STEM_COLORS = [new THREE.Color(0x557340), new THREE.Color(0x66844b)] as const;
 const FLOWER_CARD_COLOR = new THREE.Color(0xffffff);
-const WILDFLOWER_ATLAS_PATH =
-  '/assets/textures/vegetation/wildflowers/gorski-kotar-wildflower-atlas.png';
+export const WILDFLOWER_ATLAS_PATH =
+  publicAssetUrl('assets/textures/vegetation/wildflowers/gorski-kotar-wildflower-atlas.png');
 export const WILDFLOWER_ATLAS_CELL_SCALE = [1 / 5, 1] as const;
 const STEM_TEXTURE_WIDTH = 32;
 const STEM_TEXTURE_HEIGHT = 128;
@@ -68,7 +69,7 @@ export const SEEDTHREE_WILDFLOWER_VARIANTS = [
   {
     id: 'daisy-star-aster',
     label: 'Daisy star-aster',
-    texturePath: '/assets/textures/vegetation/wildflowers/daisy-star-aster-head.png',
+    texturePath: publicAssetUrl('assets/textures/vegetation/wildflowers/daisy-star-aster-head.png'),
     atlasOffset: [0, 0],
     heightScale: [1.2, 1.65],
     widthScale: [0.78, 1],
@@ -76,7 +77,7 @@ export const SEEDTHREE_WILDFLOWER_VARIANTS = [
   {
     id: 'clusius-gentian',
     label: 'Clusius gentian',
-    texturePath: '/assets/textures/vegetation/wildflowers/clusius-gentian-head.png',
+    texturePath: publicAssetUrl('assets/textures/vegetation/wildflowers/clusius-gentian-head.png'),
     atlasOffset: [1 / 5, 0],
     heightScale: [1.05, 1.4],
     widthScale: [0.64, 0.82],
@@ -84,7 +85,7 @@ export const SEEDTHREE_WILDFLOWER_VARIANTS = [
   {
     id: 'grey-hawkbit',
     label: 'Grey hawkbit',
-    texturePath: '/assets/textures/vegetation/wildflowers/grey-hawkbit-head.png',
+    texturePath: publicAssetUrl('assets/textures/vegetation/wildflowers/grey-hawkbit-head.png'),
     atlasOffset: [2 / 5, 0],
     heightScale: [1.2, 1.65],
     widthScale: [0.72, 0.94],
@@ -92,7 +93,7 @@ export const SEEDTHREE_WILDFLOWER_VARIANTS = [
   {
     id: 'bulbiferous-lily',
     label: 'Bulbiferous lily',
-    texturePath: '/assets/textures/vegetation/wildflowers/bulbiferous-lily-head.png',
+    texturePath: publicAssetUrl('assets/textures/vegetation/wildflowers/bulbiferous-lily-head.png'),
     atlasOffset: [3 / 5, 0],
     heightScale: [1.35, 1.95],
     widthScale: [0.9, 1.12],
@@ -100,7 +101,7 @@ export const SEEDTHREE_WILDFLOWER_VARIANTS = [
   {
     id: 'red-campion',
     label: 'Red campion',
-    texturePath: '/assets/textures/vegetation/wildflowers/red-campion-head.png',
+    texturePath: publicAssetUrl('assets/textures/vegetation/wildflowers/red-campion-head.png'),
     atlasOffset: [4 / 5, 0],
     heightScale: [1.25, 1.72],
     widthScale: [0.7, 0.92],

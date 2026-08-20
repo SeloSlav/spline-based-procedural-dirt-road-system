@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FixedMap } from '../terrain/FixedMap.ts';
+import { publicAssetUrl } from '../utils/publicAssetUrl.ts';
 import type { RoadNetwork, RoadNetworkSnapshot } from './RoadNetwork.ts';
 import type { RoadRenderer } from './RoadRenderer.ts';
 import {
@@ -419,7 +420,7 @@ export class RoadEditor {
   }
 
   private playPlacementSound(): void {
-    const sound = new Audio('/sounds/ui/road_place.mp3');
+    const sound = new Audio(publicAssetUrl('sounds/ui/road_place.mp3'));
     sound.volume = 0.3;
     void sound.play().catch(() => undefined);
   }

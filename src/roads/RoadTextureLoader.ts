@@ -1,4 +1,5 @@
 ﻿import * as THREE from 'three';
+import { publicAssetUrl } from '../utils/publicAssetUrl.ts';
 import { loadBitmapTexture } from '../utils/textureLoad.ts';
 
 export type TextureSet = {
@@ -25,7 +26,7 @@ export class RoadTextureLoader {
   }
 
   async loadRoadTextures(): Promise<TextureSet> {
-    const base = '/assets/textures/roads/medieval_dirt';
+    const base = publicAssetUrl('assets/textures/roads/medieval_dirt');
     const [albedo, normal, roughness, ao, height, edgeMask, rutMask] = await Promise.all([
       this.load(`${base}/albedo.png`, true),
       this.load(`${base}/normal.png`, false),
@@ -39,7 +40,7 @@ export class RoadTextureLoader {
   }
 
   async loadBridgeTextures(): Promise<TextureSet> {
-    const base = '/assets/textures/roads/wood_logs';
+    const base = publicAssetUrl('assets/textures/roads/wood_logs');
     const [albedo, normal, roughness, ao, height, edgeMask] = await Promise.all([
       this.load(`${base}/albedo.png`, true),
       this.load(`${base}/normal.png`, false),
@@ -52,7 +53,7 @@ export class RoadTextureLoader {
   }
 
   async loadTerrainTextures(): Promise<TextureSet> {
-    const base = '/assets/textures/terrain/manor_grass_blend';
+    const base = publicAssetUrl('assets/textures/terrain/manor_grass_blend');
     const wrapping = THREE.MirroredRepeatWrapping;
     const [albedo, normal, roughness, ao, height] = await Promise.all([
       this.load(`${base}/albedo.png`, true, wrapping),
@@ -66,11 +67,11 @@ export class RoadTextureLoader {
 
   async loadTerrainBlendTextures(): Promise<TerrainBlendTextureSet> {
     const [meadow, dense, dry] = await Promise.all([
-      this.loadTerrainBlendSet('/assets/textures/terrain/manor_grass_meadow'),
-      this.loadTerrainBlendSet('/assets/textures/terrain/manor_grass_dense'),
+      this.loadTerrainBlendSet(publicAssetUrl('assets/textures/terrain/manor_grass_meadow')),
+      this.loadTerrainBlendSet(publicAssetUrl('assets/textures/terrain/manor_grass_dense')),
       this.loadTerrainBlendSet(
-        '/assets/textures/terrain/manor_grass_dry',
-        '/assets/textures/terrain/manor_grass_dry/snow_albedo_atlas.png',
+        publicAssetUrl('assets/textures/terrain/manor_grass_dry'),
+        publicAssetUrl('assets/textures/terrain/manor_grass_dry/snow_albedo_atlas.png'),
       ),
     ]);
     return { meadow, dense, dry };

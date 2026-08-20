@@ -8,6 +8,8 @@ structures where roads cross water.
 
 A residence frontage tool lays out adjustable roadside plots and terrain-aligned cottages.
 
+[Open the live demo](https://seloslav.github.io/spline-based-procedural-dirt-road-system/)
+
 ## Features
 
 - Low-relief procedural terrain with multiple river confluences, meadow grass, woodland, and stone ground cover

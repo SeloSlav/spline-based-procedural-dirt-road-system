@@ -14,6 +14,7 @@ import {
 } from '../grass/grassLodMath.ts';
 import type { RendererBackendKind } from '../scene/RendererBackend.ts';
 import type { Terrain } from '../terrain/Terrain.ts';
+import { publicAssetUrl } from '../utils/publicAssetUrl.ts';
 import {
   addSeedThreeGroundCoverInstanceAttributes,
   createSeedThreeGroundCoverMaterial,
@@ -76,7 +77,7 @@ export async function createRiverReeds(
   const placements = createReedPlacements(riverField, rng);
   const textures = await loadSeedThreeGroundCoverTextures({
     albedo: seedThreeLeafUrl(CATTAIL_TEXTURE_FILES.albedo)
-      ?? '/assets/textures/vegetation/cattail_reed_card.png',
+      ?? publicAssetUrl('assets/textures/vegetation/cattail_reed_card.png'),
     normal: seedThreeLeafUrl(CATTAIL_TEXTURE_FILES.normal),
     roughness: seedThreeLeafUrl(CATTAIL_TEXTURE_FILES.roughness),
     translucency: seedThreeLeafUrl(CATTAIL_TEXTURE_FILES.translucency),

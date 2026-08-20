@@ -9,6 +9,7 @@ import {
 } from 'three/tsl';
 import { windSpeed, windStrength, WIND_DIR } from '@seedthree/core/wind.js';
 import type { RendererBackendKind } from '../../scene/RendererBackend.ts';
+import { publicAssetUrl } from '../../utils/publicAssetUrl.ts';
 import {
   createSeedThreeCardClumpGeometry,
   createSeedThreeGroundCoverMaterial,
@@ -94,7 +95,7 @@ export type SeedThreeTuftVariant = {
 };
 
 export const CLOSE_MEADOW_TUFT_PATH =
-  '/assets/textures/vegetation/grass/close-meadow-tuft.png';
+  publicAssetUrl('assets/textures/vegetation/grass/close-meadow-tuft.png');
 
 let textureCache: SeedThreeGrassTextures | null = null;
 

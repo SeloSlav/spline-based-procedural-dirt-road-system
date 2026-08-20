@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import {
   createSeedThreeGrassMaterial,
   createSeedThreeTuftVariants,
+  CLOSE_MEADOW_TUFT_PATH,
   disposeSeedThreeGrassTextureCache,
   loadSeedThreeGrassTextures,
   sampleSeedThreeGrassTint,
@@ -14,6 +15,7 @@ import {
   disposeSeedThreeWildflowerTextureCache,
   loadSeedThreeWildflowerAtlas,
   SEEDTHREE_WILDFLOWER_VARIANTS,
+  WILDFLOWER_ATLAS_PATH,
 } from '../vegetation/seedthree/seedThreeWildflowers.ts';
 import type { Terrain } from '../terrain/Terrain.ts';
 import type { RoadNetwork } from '../roads/RoadNetwork.ts';
@@ -233,8 +235,7 @@ export async function createGrassBladeField(
     mesh.frustumCulled = false;
     mesh.renderOrder = 2;
     mesh.visible = false;
-    mesh.userData.texturePath =
-      '/assets/textures/vegetation/grass/close-meadow-tuft.png';
+    mesh.userData.texturePath = CLOSE_MEADOW_TUFT_PATH;
     return { mesh, slotCapacity: GRASS_SLOT_CAPACITY, variant, tintAttr, anchorAttr };
   });
   const wildflowerGeometry = createSeedThreeWildflowerGeometry(0.9);
@@ -261,8 +262,7 @@ export async function createGrassBladeField(
   wildflowerMesh.frustumCulled = false;
   wildflowerMesh.renderOrder = 3;
   wildflowerMesh.visible = false;
-  wildflowerMesh.userData.texturePath =
-    '/assets/textures/vegetation/wildflowers/gorski-kotar-wildflower-atlas.png';
+  wildflowerMesh.userData.texturePath = WILDFLOWER_ATLAS_PATH;
   streamMeshes.push({
     mesh: wildflowerMesh,
     slotCapacity: WILDFLOWER_SLOT_CAPACITY,
