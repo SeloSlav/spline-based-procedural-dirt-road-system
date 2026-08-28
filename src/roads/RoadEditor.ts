@@ -1,18 +1,28 @@
 import * as THREE from 'three';
 import type { FixedMap } from '../terrain/FixedMap.ts';
 import { publicAssetUrl } from '../utils/publicAssetUrl.ts';
-import type { RoadNetwork, RoadNetworkSnapshot } from './RoadNetwork.ts';
+import type { RoadNetwork, RoadNetworkSnapshot, SnapTarget } from './RoadNetwork.ts';
 import type { RoadRenderer } from './RoadRenderer.ts';
 import {
   BuildingRoadConnections,
   type BuildingRoadConnectionSource,
 } from './BuildingRoadConnections.ts';
+import {
+  buildRoadBoundaryPath,
+  buildRoadBoundaryToRoadPath,
+  findRoadBoundarySnap,
+  type RoadAlignmentTarget,
+  type RoadBoundarySnap,
+  type RoadBoundaryZone,
+} from './RoadBoundarySnap.ts';
+import { getEdgePath, inwardDirectionAtNode } from './roadEndpoint.ts';
 
 const MIN_POINT_DISTANCE = 1.05;
 const MIN_COMMIT_LENGTH = 3.5;
 const CURVE_WHEEL_STEP = 1.35;
 const MAX_CURVE_OFFSET = 34;
 const SNAP_DISTANCE = 5.6;
+const CURVE_EPSILON = 0.05;
 
 export type RoadEditorState = {
   enabled: boolean;
@@ -35,14 +45,19 @@ export class RoadEditor {
   private readonly renderer: RoadRenderer;
   private readonly onStateChanged: (state: RoadEditorState) => void;
   private readonly onToggleRequested?: () => void;
+  private readonly getResidenceZones: () => Iterable<RoadBoundaryZone>;
   private readonly buildingConnections: BuildingRoadConnections;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly projectedBuildPosition = new THREE.Vector3();
   private anchors: THREE.Vector3[] = [];
+  private anchorBoundarySnaps: Array<RoadBoundarySnap | null> = [];
+  private anchorRoadAlignmentSnaps: Array<RoadAlignmentTarget | null> = [];
   private curves: number[] = [];
   private pendingCurve = 0;
   private hover: THREE.Vector3 | null = null;
+  private hoverBoundarySnap: RoadBoundarySnap | null = null;
+  private hoverRoadAlignmentSnap: RoadAlignmentTarget | null = null;
   private enabled = true;
   private canBuild = false;
   private previewBridges = 0;
@@ -60,6 +75,7 @@ export class RoadEditor {
     renderer: RoadRenderer;
     connectionParent: THREE.Object3D;
     getBuildings: () => Iterable<BuildingRoadConnectionSource>;
+    getResidenceZones: () => Iterable<RoadBoundaryZone>;
     onStateChanged: (state: RoadEditorState) => void;
     onToggleRequested?: () => void;
   }) {
@@ -77,6 +93,7 @@ export class RoadEditor {
       getBuildings: options.getBuildings,
       getRoadNodes: () => this.network.nodes.values(),
     });
+    this.getResidenceZones = options.getResidenceZones;
     this.initialSnapshot = this.network.snapshot();
     this.domElement.addEventListener('mousedown', this.onPointerDown, { capture: true });
     this.domElement.addEventListener('mousemove', this.onPointerMove);
@@ -177,7 +194,7 @@ export class RoadEditor {
     const snapshot = this.undoStack.pop();
     if (!snapshot) return;
     this.redoStack.push(this.network.snapshot());
-    this.network.restore(snapshot);
+    this.restoreRoadSnapshot(snapshot);
     this.renderer.rebuild();
     this.statusMessage = 'Last road change undone';
     this.emitState();
@@ -187,7 +204,7 @@ export class RoadEditor {
     const snapshot = this.redoStack.pop();
     if (!snapshot) return;
     this.undoStack.push(this.network.snapshot());
-    this.network.restore(snapshot);
+    this.restoreRoadSnapshot(snapshot);
     this.renderer.rebuild();
     this.statusMessage = 'Road change restored';
     this.emitState();
@@ -206,9 +223,13 @@ export class RoadEditor {
 
   cancelDraft(emit = true): void {
     this.anchors = [];
+    this.anchorBoundarySnaps = [];
+    this.anchorRoadAlignmentSnaps = [];
     this.curves = [];
     this.pendingCurve = 0;
     this.hover = null;
+    this.hoverBoundarySnap = null;
+    this.hoverRoadAlignmentSnap = null;
     this.canBuild = false;
     this.previewBridges = 0;
     this.renderer.clearPreview();
@@ -236,6 +257,8 @@ export class RoadEditor {
     if (last && distanceXZ(last, point) < MIN_POINT_DISTANCE) return;
     if (last) this.curves.push(this.pendingCurve);
     this.anchors.push(point);
+    this.anchorBoundarySnaps.push(this.hoverBoundarySnap);
+    this.anchorRoadAlignmentSnaps.push(this.hoverRoadAlignmentSnap);
     this.pendingCurve = 0;
     this.hover = null;
     this.refreshPreview();
@@ -252,6 +275,8 @@ export class RoadEditor {
   private readonly onPointerLeave = (): void => {
     this.buildingConnections.setCursor(null);
     this.hover = null;
+    this.hoverBoundarySnap = null;
+    this.hoverRoadAlignmentSnap = null;
     this.refreshPreview();
   };
 
@@ -279,6 +304,7 @@ export class RoadEditor {
       else this.toggle();
       return;
     }
+    if (!this.enabled) return;
     if (key === 'escape') {
       event.preventDefault();
       if (this.hasDraft()) this.cancelDraft();
@@ -303,6 +329,8 @@ export class RoadEditor {
 
   private undoLastAnchor(): void {
     this.anchors.pop();
+    this.anchorBoundarySnaps.pop();
+    this.anchorRoadAlignmentSnaps.pop();
     if (this.curves.length >= this.anchors.length) this.curves.pop();
     this.pendingCurve = 0;
     if (this.anchors.length === 0) this.cancelDraft();
@@ -337,10 +365,14 @@ export class RoadEditor {
   private buildDraftPath(includeHover: boolean): THREE.Vector3[] {
     const anchors = this.anchors.map((point) => point.clone());
     const curves = [...this.curves];
+    const boundarySnaps = [...this.anchorBoundarySnaps];
+    const roadAlignmentSnaps = [...this.anchorRoadAlignmentSnaps];
     const hover = includeHover ? this.getUsableHover() : null;
     if (hover) {
       anchors.push(hover.clone());
       curves.push(this.pendingCurve);
+      boundarySnaps.push(this.hoverBoundarySnap);
+      roadAlignmentSnaps.push(this.hoverRoadAlignmentSnap);
     }
     if (anchors.length === 0) return [];
     const path = [anchors[0].clone()];
@@ -348,7 +380,34 @@ export class RoadEditor {
       const a = anchors[index];
       const b = anchors[index + 1];
       const curve = curves[index] ?? 0;
-      if (Math.abs(curve) > 0.05) {
+      const boundaryStart = boundarySnaps[index] ?? null;
+      const boundaryEnd = boundarySnaps[index + 1] ?? null;
+      const roadStart = roadAlignmentSnaps[index] ?? null;
+      const roadEnd = roadAlignmentSnaps[index + 1] ?? null;
+      let constrainedPath: Array<{ x: number; z: number }> | null = null;
+      if (Math.abs(curve) <= CURVE_EPSILON) {
+        if (boundaryStart && boundaryEnd) {
+          constrainedPath = buildRoadBoundaryPath(boundaryStart, boundaryEnd);
+        } else if (boundaryStart && roadEnd) {
+          constrainedPath = buildRoadBoundaryToRoadPath(boundaryStart, roadEnd);
+        } else if (roadStart && boundaryEnd) {
+          constrainedPath = buildRoadBoundaryToRoadPath(boundaryEnd, roadStart);
+          constrainedPath?.reverse();
+        }
+      }
+      if (constrainedPath) {
+        for (let pathIndex = 1; pathIndex < constrainedPath.length; pathIndex++) {
+          if (pathIndex === constrainedPath.length - 1) {
+            path.push(b.clone());
+            continue;
+          }
+          const point = constrainedPath[pathIndex];
+          const terrainPoint = this.map.getPointAt(point.x, point.z);
+          if (distanceXZ(path[path.length - 1], terrainPoint) >= 0.1) path.push(terrainPoint);
+        }
+        continue;
+      }
+      if (Math.abs(curve) > CURVE_EPSILON) {
         const dx = b.x - a.x;
         const dz = b.z - a.z;
         const length = Math.hypot(dx, dz);
@@ -371,15 +430,95 @@ export class RoadEditor {
   private applySnap(point: THREE.Vector3): THREE.Vector3 {
     this.buildingConnections.refresh();
     const networkSnap = this.network.findSnap(point, SNAP_DISTANCE);
-    let best = networkSnap ? { point: networkSnap.point, distance: networkSnap.distance } : null;
-    for (let index = 0; index < this.anchors.length - 1; index++) {
+    const draftSnap = this.findDraftSnap(point, SNAP_DISTANCE);
+    const buildingSnap = this.buildingConnections.findSnap(point, SNAP_DISTANCE);
+    let bestPoint: THREE.Vector3 | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    this.hoverBoundarySnap = null;
+    this.hoverRoadAlignmentSnap = null;
+    if (networkSnap && networkSnap.distance < bestDistance) {
+      bestPoint = networkSnap.point;
+      bestDistance = networkSnap.distance;
+      this.hoverRoadAlignmentSnap = this.resolveRoadAlignmentSnap(networkSnap);
+    }
+    if (draftSnap && draftSnap.distance < bestDistance) {
+      bestPoint = draftSnap.point;
+      bestDistance = draftSnap.distance;
+      this.hoverBoundarySnap = draftSnap.boundarySnap;
+      this.hoverRoadAlignmentSnap = draftSnap.roadAlignmentSnap;
+    }
+    if (buildingSnap && buildingSnap.distance < bestDistance) {
+      bestPoint = buildingSnap.point;
+      bestDistance = buildingSnap.distance;
+      this.hoverBoundarySnap = null;
+      this.hoverRoadAlignmentSnap = null;
+    }
+    if (bestPoint) return bestPoint.clone();
+
+    const boundarySnap = findRoadBoundarySnap(point, this.getResidenceZones());
+    if (boundarySnap) {
+      this.hoverBoundarySnap = boundarySnap;
+      return this.map.getPointAt(boundarySnap.point.x, boundarySnap.point.z);
+    }
+    return this.map.getPointAt(point.x, point.z);
+  }
+
+  private findDraftSnap(
+    point: THREE.Vector3,
+    maxDistance: number,
+  ): {
+    point: THREE.Vector3;
+    distance: number;
+    boundarySnap: RoadBoundarySnap | null;
+    roadAlignmentSnap: RoadAlignmentTarget | null;
+  } | null {
+    let best: {
+      point: THREE.Vector3;
+      distance: number;
+      boundarySnap: RoadBoundarySnap | null;
+      roadAlignmentSnap: RoadAlignmentTarget | null;
+    } | null = null;
+    const lastIndex = this.anchors.length - 1;
+    for (let index = 0; index < this.anchors.length; index++) {
+      if (index === lastIndex) continue;
       const anchor = this.anchors[index];
       const distance = distanceXZ(anchor, point);
-      if (distance <= SNAP_DISTANCE && (!best || distance < best.distance)) best = { point: anchor, distance };
+      if (distance <= maxDistance && (!best || distance < best.distance)) {
+        best = {
+          point: anchor,
+          distance,
+          boundarySnap: this.anchorBoundarySnaps[index] ?? null,
+          roadAlignmentSnap: this.anchorRoadAlignmentSnaps[index] ?? null,
+        };
+      }
     }
-    const buildingSnap = this.buildingConnections.findSnap(point, SNAP_DISTANCE);
-    if (buildingSnap && (!best || buildingSnap.distance < best.distance)) best = buildingSnap;
-    return best ? best.point.clone() : this.map.getPointAt(point.x, point.z);
+    return best;
+  }
+
+  private resolveRoadAlignmentSnap(snap: SnapTarget): RoadAlignmentTarget | null {
+    const tangents: Array<{ x: number; z: number }> = [];
+    if (snap.kind === 'node') {
+      const node = this.network.nodes.get(snap.nodeId);
+      if (!node) return null;
+      for (const incident of this.network.getIncidents(node)) {
+        const direction = inwardDirectionAtNode(incident.edge, node.id);
+        tangents.push({ x: direction.x, z: direction.z });
+      }
+    } else {
+      const edge = this.network.edges.get(snap.edgeId);
+      if (!edge) return null;
+      const edgePath = getEdgePath(edge);
+      if (edgePath.length < 2) return null;
+      const scaledIndex = THREE.MathUtils.clamp(snap.t, 0, 1) * (edgePath.length - 1);
+      const index = Math.min(edgePath.length - 2, Math.floor(scaledIndex));
+      const dx = edgePath[index + 1].x - edgePath[index].x;
+      const dz = edgePath[index + 1].z - edgePath[index].z;
+      const length = Math.hypot(dx, dz);
+      if (length > 1e-5) tangents.push({ x: dx / length, z: dz / length });
+    }
+    return tangents.length > 0
+      ? { point: { x: snap.point.x, z: snap.point.z }, tangents }
+      : null;
   }
 
   private pick(clientX: number, clientY: number): THREE.Vector3 | null {
@@ -423,6 +562,16 @@ export class RoadEditor {
     const sound = new Audio(publicAssetUrl('sounds/ui/road_place.mp3'));
     sound.volume = 0.3;
     void sound.play().catch(() => undefined);
+  }
+
+  /** Road history is independent from the decoration tool's wall history. */
+  private restoreRoadSnapshot(snapshot: RoadNetworkSnapshot): void {
+    const current = this.network.snapshot();
+    this.network.restore({
+      ...snapshot,
+      nextDryStoneWallId: current.nextDryStoneWallId,
+      dryStoneWalls: current.dryStoneWalls,
+    });
   }
 }
 

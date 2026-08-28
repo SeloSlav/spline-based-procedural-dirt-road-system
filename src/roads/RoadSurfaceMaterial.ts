@@ -15,6 +15,7 @@ import {
   vec3,
 } from 'three/tsl';
 import type { TextureSet } from './RoadTextureLoader.ts';
+import { BRIDGE_SURFACE_CUT_THRESHOLD } from './roadDimensions.ts';
 
 type TslNode = {
   add(value: TslNode): TslNode;
@@ -57,8 +58,13 @@ function greyCoolRoadColor(map: TslNode, desaturate: number, tint: [number, numb
   return desaturated.mul(vec3(tint[0], tint[1], tint[2]) as TslNode);
 }
 
-function buildRoadColorNode(textures: TextureSet, desaturate: number, tint: [number, number, number]): TslNode {
-  const sample = texture(textures.albedo, uv() as TslNode) as TslNode;
+function buildRoadColorNode(
+  textures: TextureSet,
+  desaturate: number,
+  tint: [number, number, number],
+  sampleUv: TslNode = uv() as TslNode,
+): TslNode {
+  const sample = texture(textures.albedo, sampleUv) as TslNode;
   const baseColor = greyCoolRoadColor(sample, desaturate, tint);
   const world = positionWorld as TslNode;
   const macroA = (sin(
@@ -199,14 +205,26 @@ export function createRoadCoreMaterial(
     rutMask,
   );
   if (bridgeTextures) {
-    const woodColor = buildRoadColorNode(bridgeTextures, 0.38, [1.02, 0.96, 0.88]);
-    const bridgeBlend = pow(attribute('bridgeBlend', 'float') as TslNode, float(0.92) as TslNode) as TslNode;
-    const surfaceColor = mix(dirtColor, woodColor, bridgeBlend) as TslNode;
+    const bridgeUv = attribute('bridgeUv', 'vec2') as TslNode;
+    const woodColor = buildRoadColorNode(
+      bridgeTextures,
+      0.24,
+      [1.08, 0.91, 0.74],
+      bridgeUv,
+    );
+    // Assembled timber begins at a crisp deck edge rather than dissolving
+    // gradually into the dirt along the whole approach ramp.
+    const bridgeMask = smoothstep(
+      float(BRIDGE_SURFACE_CUT_THRESHOLD - 0.0001) as TslNode,
+      float(BRIDGE_SURFACE_CUT_THRESHOLD) as TslNode,
+      attribute('bridgeBlend', 'float') as TslNode,
+    ) as TslNode;
+    const surfaceColor = mix(dirtColor, woodColor, bridgeMask) as TslNode;
     material.colorNode = applyRoadWeatherColor(surfaceColor, weather);
 
     const dirtNormal = normalMap(texture(dirtTextures.normal, uv()));
-    const woodNormal = normalMap(texture(bridgeTextures.normal, uv()));
-    material.normalNode = mix(dirtNormal, woodNormal, bridgeBlend);
+    const woodNormal = normalMap(texture(bridgeTextures.normal, bridgeUv));
+    material.normalNode = mix(dirtNormal, woodNormal, bridgeMask);
 
     const dirtRoughBase = (texture(dirtTextures.roughness, uv() as TslNode) as TslNode).r;
     const dirtRough = mix(
@@ -214,14 +232,25 @@ export function createRoadCoreMaterial(
       float(0.58) as TslNode,
       rutMask.mul(float(0.46) as TslNode),
     ) as TslNode;
-    const woodRough = (texture(bridgeTextures.roughness, uv() as TslNode) as TslNode).r;
+    const woodRough = (texture(bridgeTextures.roughness, bridgeUv) as TslNode).r;
     const surfaceRoughness = mix(
       dirtRough,
-      woodRough.mul(float(0.94) as TslNode),
-      bridgeBlend,
+      mix(float(0.86) as TslNode, woodRough, float(0.78) as TslNode) as TslNode,
+      bridgeMask,
     ) as TslNode;
     material.roughnessNode = applyRoadWeatherRoughness(surfaceRoughness, weather);
-    if (dirtTextures.ao) material.aoNode = (texture(dirtTextures.ao, uv() as TslNode) as TslNode).r;
+    const dirtAo = dirtTextures.ao
+      ? (texture(dirtTextures.ao, uv() as TslNode) as TslNode).r
+      : float(1) as TslNode;
+    const woodAo = bridgeTextures.ao
+      ? (texture(bridgeTextures.ao, bridgeUv) as TslNode).r
+      : float(1) as TslNode;
+    material.aoNode = mix(dirtAo, woodAo, bridgeMask);
+    material.userData.bridgeSurface = {
+      textureFamily: 'rough-hewn-timber',
+      transition: 'crisp-deck-edge',
+      debugAttribute: 'bridgeBlend',
+    };
   } else {
     material.colorNode = applyRoadWeatherColor(dirtColor, weather);
     material.normalNode = normalMap(texture(dirtTextures.normal, uv()));
@@ -261,7 +290,12 @@ export function createRoadEdgeMaterial(
   let opacity = buildBankOpacityNode(textures);
   if (fadeBridgeEdges) {
     const bridgeBlendAttr = attribute('bridgeBlend', 'float') as TslNode;
-    const edgeKeep = sub(float(1) as TslNode, bridgeBlendAttr) as TslNode;
+    const bridgeMask = smoothstep(
+      float(BRIDGE_SURFACE_CUT_THRESHOLD - 0.0001) as TslNode,
+      float(BRIDGE_SURFACE_CUT_THRESHOLD) as TslNode,
+      bridgeBlendAttr,
+    ) as TslNode;
+    const edgeKeep = sub(float(1) as TslNode, bridgeMask) as TslNode;
     opacity = opacity.mul(edgeKeep) as TslNode;
   }
   material.opacityNode = opacity;

@@ -11,6 +11,8 @@ import type { MeshStandardNodeMaterial } from 'three/webgpu';
 
 export class RoadMaterialFactory {
   readonly road!: MeshStandardNodeMaterial;
+  readonly bridgeRoad!: MeshStandardNodeMaterial;
+  readonly bridgeRailing!: THREE.Material;
   readonly roadEdge!: MeshStandardNodeMaterial;
   readonly riverBank!: MeshStandardNodeMaterial;
   readonly terrain!: MeshStandardNodeMaterial;
@@ -126,6 +128,7 @@ export class RoadMaterialFactory {
   dispose(): void {
     const materials = [
       this.road,
+      this.bridgeRoad,
       this.roadEdge,
       this.riverBank,
       this.terrain,
@@ -164,6 +167,8 @@ export class RoadMaterialFactory {
 
   private createMaterials(): {
     road: MeshStandardNodeMaterial;
+    bridgeRoad: MeshStandardNodeMaterial;
+    bridgeRailing: THREE.Material;
     roadEdge: MeshStandardNodeMaterial;
     riverBank: MeshStandardNodeMaterial;
     terrain: MeshStandardNodeMaterial;
@@ -178,6 +183,10 @@ export class RoadMaterialFactory {
       throw new Error('Textures are not loaded.');
     }
     const road = createRoadCoreMaterial(
+      this.roadTextures,
+      this.roadWeatherUniforms,
+    );
+    const bridgeRoad = createRoadCoreMaterial(
       this.roadTextures,
       this.roadWeatherUniforms,
       this.bridgeTextures,
@@ -213,7 +222,23 @@ export class RoadMaterialFactory {
       bridgeSupport.normalMap = this.bridgeTextures.normal;
       bridgeSupport.normalScale.set(0.45, 0.45);
     }
-    return { road, roadEdge, riverBank, terrain, rainTerrain, bridgeSupport };
+    bridgeSupport.name = 'Bridge rough-hewn timber';
+    bridgeSupport.userData.bridgeTimber = {
+      identity: 'rough-hewn timber',
+      roughness: 0.9,
+      normalStrength: 0.45,
+    };
+    const bridgeRailing = bridgeSupport;
+    return {
+      road,
+      bridgeRoad,
+      bridgeRailing,
+      roadEdge,
+      riverBank,
+      terrain,
+      rainTerrain,
+      bridgeSupport,
+    };
   }
 
   private disposeTextureSet(set: TextureSet): void {

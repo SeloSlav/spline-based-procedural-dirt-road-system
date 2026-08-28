@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Terrain } from '../terrain/Terrain.ts';
 import {
-  getBuildingRoadConnectionPoints,
+  getBuildingRoadEntrancePoints,
   type BuildingRoadConnection,
   type BuildingRoadConnectionSource,
 } from './BuildingRoadConnections.ts';
@@ -24,9 +24,9 @@ export type BuildingAccessSpurPlan = {
 };
 
 /**
- * Chooses the residence-footprint anchor nearest the road that grants access.
- * The 20 m center-distance rule matches the source game while the visible spur
- * begins at the actual house perimeter, not at its center.
+ * Chooses the residence-envelope entrance nearest the road that grants access.
+ * Display circles deliberately sit farther out and are not physical spur
+ * endpoints, allowing the slim access lane to finish at the house itself.
  */
 export function planBuildingAccessSpurs(
   buildings: Iterable<BuildingRoadConnectionSource>,
@@ -40,7 +40,7 @@ export function planBuildingAccessSpurs(
     const roadSnap = network.findSnap(center, BUILDING_ROAD_ACCESS_DISTANCE + 1e-6);
     if (!roadSnap) continue;
     const connection = nearestConnection(
-      getBuildingRoadConnectionPoints(building, terrain),
+      getBuildingRoadEntrancePoints(building, terrain),
       roadSnap.point,
     );
     if (!connection) continue;
@@ -73,7 +73,7 @@ export class BuildingAccessSpurs {
   }) {
     this.terrain = options.terrain;
     this.meshBuilder = options.meshBuilder;
-    this.group.name = 'Residence access road spurs';
+    this.group.name = 'Building access road spurs';
     options.parent.add(this.group);
   }
 

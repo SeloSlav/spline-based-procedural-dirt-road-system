@@ -2,10 +2,18 @@ import * as THREE from 'three';
 import type { FixedMap } from '../terrain/FixedMap.ts';
 
 const MARKER_LIFT = 0.16;
-const NEAREST_FULL_DISTANCE = 7;
-const NEAREST_REVEAL_DISTANCE = 14;
-const SIBLING_FULL_DISTANCE = 5;
-const SIBLING_REVEAL_DISTANCE = 9;
+export const BUILDING_ROAD_CONNECTION_MARKER_INNER_RADIUS = 0.78;
+export const BUILDING_ROAD_CONNECTION_MARKER_OUTER_RADIUS = 1.14;
+/** Clear space from the residence envelope to every circle's outer edge. */
+export const BUILDING_ROAD_CONNECTION_EDGE_CLEARANCE = 0.86;
+/** Horizontal distance from the residence envelope to a circle center. */
+export const BUILDING_ROAD_CONNECTION_CENTER_OFFSET =
+  BUILDING_ROAD_CONNECTION_MARKER_OUTER_RADIUS
+  + BUILDING_ROAD_CONNECTION_EDGE_CLEARANCE;
+const NEAREST_FULL_DISTANCE = 7 + BUILDING_ROAD_CONNECTION_CENTER_OFFSET;
+const NEAREST_REVEAL_DISTANCE = 14 + BUILDING_ROAD_CONNECTION_CENTER_OFFSET;
+const SIBLING_FULL_DISTANCE = 5 + BUILDING_ROAD_CONNECTION_CENTER_OFFSET;
+const SIBLING_REVEAL_DISTANCE = 13 + BUILDING_ROAD_CONNECTION_CENTER_OFFSET;
 const MIN_OPACITY = 0.015;
 
 export type BuildingRoadConnectionSource = {
@@ -28,24 +36,49 @@ export type BuildingRoadConnection = {
   point: THREE.Vector3;
 };
 
-/** Exact midpoint anchors on each rotated residence footprint edge. */
+/**
+ * Display anchors centered beyond each rotated residence edge. The complete
+ * white circle remains clear of the house while the access spur continues
+ * inward to the real entrance point.
+ */
 export function getBuildingRoadConnectionPoints(
   building: BuildingRoadConnectionSource,
   map: Pick<FixedMap, 'getPointAt'>,
 ): BuildingRoadConnection[] {
-  const cos = Math.cos(building.yaw);
-  const sin = Math.sin(building.yaw);
-  const offsets = [
+  return localOffsetsToConnections(building, map, [
+    { x: 0, z: building.halfDepth + BUILDING_ROAD_CONNECTION_CENTER_OFFSET },
+    { x: building.halfWidth + BUILDING_ROAD_CONNECTION_CENTER_OFFSET, z: 0 },
+    { x: 0, z: -building.halfDepth - BUILDING_ROAD_CONNECTION_CENTER_OFFSET },
+    { x: -building.halfWidth - BUILDING_ROAD_CONNECTION_CENTER_OFFSET, z: 0 },
+  ]);
+}
+
+/** The matching midpoint entrances on the actual residence envelope. */
+export function getBuildingRoadEntrancePoints(
+  building: BuildingRoadConnectionSource,
+  map: Pick<FixedMap, 'getPointAt'>,
+): BuildingRoadConnection[] {
+  return localOffsetsToConnections(building, map, [
     { x: 0, z: building.halfDepth },
     { x: building.halfWidth, z: 0 },
     { x: 0, z: -building.halfDepth },
     { x: -building.halfWidth, z: 0 },
-  ];
+  ], 'entrance:');
+}
+
+function localOffsetsToConnections(
+  building: BuildingRoadConnectionSource,
+  map: Pick<FixedMap, 'getPointAt'>,
+  offsets: ReadonlyArray<Readonly<{ x: number; z: number }>>,
+  idPrefix = '',
+): BuildingRoadConnection[] {
+  const cos = Math.cos(building.yaw);
+  const sin = Math.sin(building.yaw);
   return offsets.map((offset, index) => {
     const x = building.x + offset.x * cos + offset.z * sin;
     const z = building.z - offset.x * sin + offset.z * cos;
     return {
-      id: `${building.id}:${index}`,
+      id: `${building.id}:${idPrefix}${index}`,
       buildingId: building.id,
       point: map.getPointAt(x, z),
     };
@@ -69,7 +102,11 @@ export class BuildingRoadConnections {
   private readonly map: FixedMap;
   private readonly getBuildings: () => Iterable<BuildingRoadConnectionSource>;
   private readonly getRoadNodes: () => Iterable<RoadNodeConnectionSource>;
-  private readonly ringGeometry = new THREE.RingGeometry(0.78, 1.14, 20);
+  private readonly ringGeometry = new THREE.RingGeometry(
+    BUILDING_ROAD_CONNECTION_MARKER_INNER_RADIUS,
+    BUILDING_ROAD_CONNECTION_MARKER_OUTER_RADIUS,
+    20,
+  );
   private readonly postGeometry = new THREE.CylinderGeometry(0.18, 0.28, 0.56, 8);
   private readonly ringMaterial = createMarkerMaterial(THREE.DoubleSide);
   private readonly postMaterial = createMarkerMaterial(THREE.FrontSide);

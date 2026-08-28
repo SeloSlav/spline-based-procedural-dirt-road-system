@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import type { WebGPURenderer } from 'three/webgpu';
 import { CameraController } from './camera/CameraController.ts';
+import {
+  DryStoneWallEditor,
+  type DryStoneWallEditorState,
+} from './decorations/DryStoneWallEditor.ts';
+import { DryStoneWallRenderer } from './decorations/DryStoneWallRenderer.ts';
 import { createGrassBladeField, type GrassBladeField } from './grass/GrassBladeField.ts';
 import { updateTerrainZoomBlend } from './grass/GrassLodConfig.ts';
 import { computeForestTreePlacements, type ForestTreePlacement } from './props/forestPlacements.ts';
@@ -59,6 +64,8 @@ class RoadNetworkEditorApp {
   private readonly roadEditor: RoadEditor;
   private readonly residenceSystem: ResidenceSystem;
   private readonly residenceTool: ResidenceTool;
+  private readonly wallRenderer: DryStoneWallRenderer;
+  private readonly wallEditor: DryStoneWallEditor;
   private readonly interactionOverlay = new THREE.Group();
   private readonly cameraController: CameraController;
   private readonly sunLight: THREE.DirectionalLight;
@@ -102,6 +109,14 @@ class RoadNetworkEditorApp {
     plotCount: 1,
     residenceCount: 0,
     message: 'Click beside a road to start the residence frontage',
+  };
+  private wallState: DryStoneWallEditorState = {
+    enabled: false,
+    hasDraft: false,
+    canBuild: false,
+    anchors: 0,
+    wallCount: 0,
+    message: 'Click a road shoulder to begin a low stone wall',
   };
 
   constructor(
@@ -167,6 +182,12 @@ class RoadNetworkEditorApp {
     this.residenceSystem = new ResidenceSystem(this.map);
     this.roadRenderer.syncBuildingAccessRoads(this.residenceSystem.getRoadConnectionSources());
     this.interactionOverlay.name = 'Placement interaction overlays';
+    this.wallRenderer = new DryStoneWallRenderer({
+      terrain: this.terrainSurface,
+      parent: this.scene,
+      previewParent: this.interactionOverlay,
+    });
+    this.wallRenderer.sync(this.network.dryStoneWalls.values(), this.network);
     this.scene.add(
       terrain,
       this.riverGroup,
@@ -185,6 +206,7 @@ class RoadNetworkEditorApp {
       renderer: this.roadRenderer,
       connectionParent: this.interactionOverlay,
       getBuildings: () => this.residenceSystem.getRoadConnectionSources(),
+      getResidenceZones: () => this.residenceSystem.getZones(),
       onStateChanged: (state) => this.renderEditorState(state),
       onToggleRequested: () => this.toggleTool('road'),
     });
@@ -206,15 +228,32 @@ class RoadNetworkEditorApp {
       onToggleRequested: () => this.toggleTool('residence'),
     });
 
+    this.wallEditor = new DryStoneWallEditor({
+      domElement: this.renderer.domElement,
+      camera: this.camera,
+      terrainMesh: terrain,
+      map: this.map,
+      network: this.network,
+      renderer: this.wallRenderer,
+      onStateChanged: (state) => this.renderWallState(state),
+      onPlaced: () => this.requestShadowRefresh(),
+      onToggleRequested: () => this.toggleTool('wall'),
+    });
+
     this.cameraController = new CameraController({
       camera: this.camera,
       target: this.cameraTarget,
       domElement: this.renderer.domElement,
       bounds: this.map.bounds,
       getHeightAt: (x, z) => this.map.getHeightAt(x, z),
-      getCursorOverride: () => this.residenceTool.getCursor() ?? this.roadEditor.getCursor(),
+      getCursorOverride: () => (
+        this.wallEditor.getCursor()
+        ?? this.residenceTool.getCursor()
+        ?? this.roadEditor.getCursor()
+      ),
       shouldIgnoreInput: (event) => (
-        this.residenceTool.shouldIgnoreCameraInput(event)
+        this.wallEditor.shouldIgnoreCameraInput(event)
+        || this.residenceTool.shouldIgnoreCameraInput(event)
         || this.roadEditor.shouldIgnoreCameraInput(event)
       ),
       continuousRenderLoop: true,
@@ -365,19 +404,24 @@ class RoadNetworkEditorApp {
   private bindUi(): void {
     this.mustFind<HTMLButtonElement>('[data-tool-road]').addEventListener('click', () => this.toggleTool('road'));
     this.mustFind<HTMLButtonElement>('[data-tool-residence]').addEventListener('click', () => this.toggleTool('residence'));
+    this.mustFind<HTMLButtonElement>('[data-tool-wall]').addEventListener('click', () => this.toggleTool('wall'));
     this.buildButton.addEventListener('click', () => {
-      if (this.residenceTool.isEnabled()) this.residenceTool.commit();
+      if (this.wallEditor.isEnabled()) this.wallEditor.commit();
+      else if (this.residenceTool.isEnabled()) this.residenceTool.commit();
       else this.roadEditor.commit();
     });
     this.mustFind<HTMLButtonElement>('[data-undo]').addEventListener('click', () => {
-      if (this.residenceTool.isEnabled()) this.residenceTool.undo();
+      if (this.wallEditor.isEnabled()) this.wallEditor.undo();
+      else if (this.residenceTool.isEnabled()) this.residenceTool.undo();
       else this.roadEditor.undo();
     });
     this.mustFind<HTMLButtonElement>('[data-redo]').addEventListener('click', () => {
-      if (this.residenceTool.isEnabled()) this.residenceTool.redo();
+      if (this.wallEditor.isEnabled()) this.wallEditor.redo();
+      else if (this.residenceTool.isEnabled()) this.residenceTool.redo();
       else this.roadEditor.redo();
     });
     this.mustFind<HTMLButtonElement>('[data-clear]').addEventListener('click', () => {
+      this.wallEditor.clearAll();
       this.roadEditor.clearAll();
       this.residenceTool.clearAll();
     });
@@ -390,6 +434,7 @@ class RoadNetworkEditorApp {
     const revision = this.network.getTopologyRevision();
     if (revision !== this.lastTopologyRevision) {
       this.lastTopologyRevision = revision;
+      this.wallRenderer.sync(this.network.dryStoneWalls.values(), this.network);
       this.syncSourceEnvironmentRoadClearance();
     }
   }
@@ -399,61 +444,97 @@ class RoadNetworkEditorApp {
     this.renderToolState();
   }
 
+  private renderWallState(state: DryStoneWallEditorState): void {
+    this.wallState = state;
+    this.renderToolState();
+  }
+
   private renderToolState(): void {
     const roadActive = this.roadState.enabled;
     const residenceActive = this.residenceState.enabled;
+    const wallActive = this.wallState.enabled;
     const roadTool = this.mustFind<HTMLButtonElement>('[data-tool-road]');
     const residenceTool = this.mustFind<HTMLButtonElement>('[data-tool-residence]');
+    const wallTool = this.mustFind<HTMLButtonElement>('[data-tool-wall]');
     roadTool.classList.toggle('is-active', roadActive);
     residenceTool.classList.toggle('is-active', residenceActive);
+    wallTool.classList.toggle('is-active', wallActive);
     roadTool.setAttribute('aria-pressed', String(roadActive));
     residenceTool.setAttribute('aria-pressed', String(residenceActive));
-    const activeState = residenceActive ? this.residenceState : this.roadState;
-    this.mustFind<HTMLElement>('[data-mode]').textContent = residenceActive
-      ? 'HOUSE PLACEMENT ACTIVE'
-      : roadActive
-        ? 'ROAD TOOL ACTIVE'
-        : 'NAVIGATION MODE';
+    wallTool.setAttribute('aria-pressed', String(wallActive));
+    const activeState = wallActive
+      ? this.wallState
+      : residenceActive
+        ? this.residenceState
+        : this.roadState;
+    this.mustFind<HTMLElement>('[data-mode]').textContent = wallActive
+      ? 'STONE WALL TOOL ACTIVE'
+      : residenceActive
+        ? 'HOUSE PLACEMENT ACTIVE'
+        : roadActive
+          ? 'ROAD TOOL ACTIVE'
+          : 'NAVIGATION MODE';
     this.mustFind<HTMLElement>('[data-status]').textContent = activeState.message;
     this.mustFind<HTMLElement>('[data-road-count]').textContent = String(this.roadState.roadCount);
     this.mustFind<HTMLElement>('[data-bridge-count]').textContent = String(this.roadState.bridgeCount);
     this.mustFind<HTMLElement>('[data-residence-count]').textContent = String(this.residenceSystem.getResidenceCount());
     this.mustFind<HTMLElement>('[data-frontage-count]').textContent = String(this.residenceSystem.getZoneCount());
-    this.mustFind<HTMLElement>('[data-anchor-count]').textContent = residenceActive
-      ? String(this.residenceState.stage < 4 ? this.residenceState.stage : 4)
-      : String(this.roadState.anchors);
+    this.mustFind<HTMLElement>('[data-wall-count]').textContent = String(this.wallState.wallCount);
+    this.mustFind<HTMLElement>('[data-anchor-count]').textContent = wallActive
+      ? String(this.wallState.anchors)
+      : residenceActive
+        ? String(this.residenceState.stage < 4 ? this.residenceState.stage : 4)
+        : String(this.roadState.anchors);
     const bridgeHint = this.mustFind<HTMLElement>('[data-bridge-hint]');
-    bridgeHint.classList.toggle('is-visible', !residenceActive && this.roadState.previewBridges > 0);
+    bridgeHint.classList.toggle('is-visible', !residenceActive && !wallActive && this.roadState.previewBridges > 0);
     bridgeHint.classList.toggle('is-residence', residenceActive);
-    bridgeHint.textContent = residenceActive
-      ? 'First 2 points snap beside roads · place 2 back corners freely'
-      : this.roadState.previewBridges > 0
-        ? `${this.roadState.previewBridges} automatic timber bridge${this.roadState.previewBridges === 1 ? '' : 's'} in this route`
-        : 'Roads snap to nearby white circles on roads and residences';
+    bridgeHint.classList.toggle('is-wall', wallActive);
+    bridgeHint.textContent = wallActive
+      ? 'Start on a road shoulder · roadside points hug the verge · Alt-click a wall to remove it'
+      : residenceActive
+        ? 'First 2 points snap beside roads · place 2 back corners freely'
+        : this.roadState.previewBridges > 0
+          ? `${this.roadState.previewBridges} automatic timber bridge${this.roadState.previewBridges === 1 ? '' : 's'} in this route`
+          : 'Roads snap to circles, residence boundaries, bridge hubs, and access lanes';
     const build = this.buildButton;
-    const canBuild = residenceActive ? this.residenceState.canBuild : this.roadState.canBuild;
+    const canBuild = wallActive
+      ? this.wallState.canBuild
+      : residenceActive
+        ? this.residenceState.canBuild
+        : this.roadState.canBuild;
     build.disabled = !canBuild;
     build.hidden = !canBuild;
-    const buildLabel = residenceActive
-      ? 'Construct residences instantly'
-      : this.roadState.previewBridges > 0
-        ? 'Build road and bridge'
-        : 'Build road';
+    const buildLabel = wallActive
+      ? 'Build low stone wall'
+      : residenceActive
+        ? 'Construct residences instantly'
+        : this.roadState.previewBridges > 0
+          ? 'Build road and bridge'
+          : 'Build road';
     build.setAttribute('aria-label', buildLabel);
     build.title = `${buildLabel} (Enter)`;
     this.syncBuildButtonPosition();
   }
 
-  private toggleTool(tool: 'road' | 'residence'): void {
+  private toggleTool(tool: 'road' | 'residence' | 'wall'): void {
     if (tool === 'road') {
       const next = !this.roadEditor.isEnabled();
       this.residenceTool.setEnabled(false);
+      this.wallEditor.setEnabled(false);
       this.roadEditor.setEnabled(next);
       return;
     }
-    const next = !this.residenceTool.isEnabled();
+    if (tool === 'residence') {
+      const next = !this.residenceTool.isEnabled();
+      this.roadEditor.setEnabled(false);
+      this.wallEditor.setEnabled(false);
+      this.residenceTool.setEnabled(next);
+      return;
+    }
+    const next = !this.wallEditor.isEnabled();
     this.roadEditor.setEnabled(false);
-    this.residenceTool.setEnabled(next);
+    this.residenceTool.setEnabled(false);
+    this.wallEditor.setEnabled(next);
   }
 
   private readonly onResize = (): void => {
@@ -468,7 +549,7 @@ class RoadNetworkEditorApp {
 
   private syncBuildButtonPosition(): void {
     const build = this.buildButton;
-    if (!this.roadEditor || !this.residenceTool) {
+    if (!this.roadEditor || !this.residenceTool || !this.wallEditor) {
       build.hidden = true;
       return;
     }
@@ -476,9 +557,11 @@ class RoadNetworkEditorApp {
       build.hidden = true;
       return;
     }
-    const position = this.residenceTool.isEnabled()
-      ? this.residenceTool.getBuildButtonPosition()
-      : this.roadEditor.getBuildButtonPosition();
+    const position = this.wallEditor.isEnabled()
+      ? this.wallEditor.getBuildButtonPosition()
+      : this.residenceTool.isEnabled()
+        ? this.residenceTool.getBuildButtonPosition()
+        : this.roadEditor.getBuildButtonPosition();
     if (!position) {
       build.hidden = true;
       return;
@@ -733,6 +816,7 @@ function pageTemplate(): string {
           <div><dt>River bridges</dt><dd data-bridge-count>0</dd></div>
           <div><dt>Residences</dt><dd data-residence-count>0</dd></div>
           <div><dt>Frontages</dt><dd data-frontage-count>0</dd></div>
+          <div><dt>Stone walls</dt><dd data-wall-count>0</dd></div>
           <div><dt>Draft points</dt><dd data-anchor-count>0</dd></div>
         </dl>
       </aside>
@@ -744,6 +828,7 @@ function pageTemplate(): string {
         <div class="control-row"><kbd>WHEEL</kbd><span>Zoom 30–1000%</span></div>
         <div class="control-row"><kbd>Q / E</kbd><span>Rotate left / right</span></div>
         <div class="control-row"><kbd>B</kbd><span>House placement tool</span></div>
+        <div class="control-row"><kbd>L</kbd><span>Roadside stone-wall tool</span></div>
         <div class="control-row"><kbd>+ / −</kbd><span>Adjust residence plots</span></div>
       </aside>
 
@@ -765,17 +850,22 @@ function pageTemplate(): string {
           <span class="tool-label">House</span>
           <kbd>B</kbd>
         </button>
+        <button class="tool-button wall-tool" data-tool-wall type="button" aria-label="Toggle roadside stone-wall tool" aria-pressed="false" title="Roadside stone-wall tool (L)">
+          <span class="wall-sprite" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="tool-label">Stone wall</span>
+          <kbd>L</kbd>
+        </button>
         <div class="dock-divider"></div>
-        <button class="dock-action" data-undo type="button" aria-label="Undo last point or road"><span>↶</span>Undo</button>
-        <button class="dock-action" data-redo type="button" aria-label="Redo road"><span>↷</span>Redo</button>
-        <button class="dock-action danger" data-clear type="button" aria-label="Clear all roads"><span>×</span>Clear</button>
+        <button class="dock-action" data-undo type="button" aria-label="Undo last tool change"><span>↶</span>Undo</button>
+        <button class="dock-action" data-redo type="button" aria-label="Redo tool change"><span>↷</span>Redo</button>
+        <button class="dock-action danger" data-clear type="button" aria-label="Clear all roads, residences, and walls"><span>×</span>Clear</button>
       </nav>
 
       <button class="floating-build-button" data-build type="button" aria-label="Build road" title="Build road (Enter)" disabled hidden>
         <span class="hammer-sprite" aria-hidden="true"></span>
       </button>
 
-      <div class="curve-tip">Terrain-aware splines · automatic river bridges · <kbd>CTRL</kbd> + <kbd>WHEEL</kbd> bends road splines</div>
+      <div class="curve-tip">Plot-hugging roads · capped access lanes · timber bridges · roadside dry-stone walls</div>
     </section>
   `;
 }

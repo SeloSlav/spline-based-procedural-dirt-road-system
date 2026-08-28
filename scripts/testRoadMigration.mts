@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { BuildingAccessSpurs, planBuildingAccessSpurs } from '../src/roads/BuildingAccessSpurs.ts';
+import {
+  BUILDING_ROAD_CONNECTION_CENTER_OFFSET,
+  getBuildingRoadConnectionPoints,
+  getBuildingRoadEntrancePoints,
+} from '../src/roads/BuildingRoadConnections.ts';
+import {
+  buildRoadBoundaryPath,
+  findRoadBoundarySnap,
+} from '../src/roads/RoadBoundarySnap.ts';
 import { RoadJunctionBuilder } from '../src/roads/RoadJunctionBuilder.ts';
 import { RoadMeshBuilder } from '../src/roads/RoadMeshBuilder.ts';
 import { RoadNetwork } from '../src/roads/RoadNetwork.ts';
@@ -26,7 +35,9 @@ const terrain = {
 const materials = {
   road: new THREE.MeshBasicMaterial(),
   roadEdge: new THREE.MeshBasicMaterial({ transparent: true }),
+  bridgeRoad: new THREE.MeshBasicMaterial(),
   bridgeSupport: new THREE.MeshBasicMaterial(),
+  bridgeRailing: new THREE.MeshBasicMaterial(),
   previewValid: new THREE.MeshBasicMaterial(),
   previewInvalid: new THREE.MeshBasicMaterial(),
   previewBlendValid: new THREE.MeshBasicMaterial({ transparent: true }),
@@ -36,6 +47,24 @@ const materials = {
 
 assert.equal(roadVisualWidth(ROAD_WIDTH), ROAD_WIDTH * ROAD_VISUAL_WIDTH_SCALE);
 assert(BUILDING_ACCESS_SPUR_WIDTH < roadVisualWidth(ROAD_WIDTH) * 0.5);
+
+const residenceBoundary = {
+  id: 'frontage-regression',
+  corners: {
+    a: { x: -10, z: -10 },
+    b: { x: 10, z: -10 },
+    c: { x: 10, z: 10 },
+    d: { x: -10, z: 10 },
+  },
+};
+const southBoundary = findRoadBoundarySnap({ x: 0, z: -12 }, [residenceBoundary]);
+const eastBoundary = findRoadBoundarySnap({ x: 12, z: 0 }, [residenceBoundary]);
+assert(southBoundary && eastBoundary);
+assert(Math.abs(southBoundary.point.z + 12.1) < 0.001);
+assert(Math.abs(eastBoundary.point.x - 12.1) < 0.001);
+const huggingPath = buildRoadBoundaryPath(southBoundary, eastBoundary);
+assert(huggingPath && huggingPath.length > 4, 'plot-corner road needs an exterior rounded path');
+assert(huggingPath.every((point) => Math.abs(point.x) >= 9.99 || Math.abs(point.z) >= 9.99));
 
 const rotatedCorner = new RoadNetwork();
 const directions = [17, 137].map((degrees) => {
@@ -104,6 +133,15 @@ const residence = {
   halfWidth: 3.3,
   halfDepth: 3.7,
 };
+const displayConnections = getBuildingRoadConnectionPoints(residence, terrain);
+const entranceConnections = getBuildingRoadEntrancePoints(residence, terrain);
+assert.equal(displayConnections.length, entranceConnections.length);
+for (let index = 0; index < displayConnections.length; index++) {
+  assert(Math.abs(
+    displayConnections[index].point.distanceTo(entranceConnections[index].point)
+    - BUILDING_ROAD_CONNECTION_CENTER_OFFSET,
+  ) < 1e-6);
+}
 const [spurPlan] = planBuildingAccessSpurs([residence], terrain, accessNetwork);
 assert(spurPlan);
 assert.equal(spurPlan.visualWidth, BUILDING_ACCESS_SPUR_WIDTH);
@@ -118,6 +156,52 @@ const accessSpurs = new BuildingAccessSpurs({
 accessSpurs.sync([residence], accessNetwork);
 assert.equal(accessSpurs.group.children.length, 1);
 assert.equal(accessSpurs.group.children[0].userData.buildingId, residence.id);
+const spurCore = accessSpurs.group.children[0].getObjectByName(
+  `Building access spur core ${residence.id}`,
+) as THREE.Mesh;
+assert(spurCore);
+const spurPositions = spurCore.geometry.getAttribute('position');
+let spurMaximumZ = Number.NEGATIVE_INFINITY;
+for (let index = 0; index < spurPositions.count; index++) {
+  spurMaximumZ = Math.max(spurMaximumZ, spurPositions.getZ(index));
+}
+assert(
+  spurMaximumZ > spurPlan.connection.point.z + 0.2,
+  'residence access lane needs a rounded terminal cap that fades into the footprint',
+);
+
+const bridgeNetwork = new RoadNetwork();
+const [bridgeEdgeId] = bridgeNetwork.addRoadPath([
+  terrain.getPointAt(-34, -22),
+  terrain.getPointAt(0, -22),
+  terrain.getPointAt(34, -22),
+]);
+const bridgeEdge = bridgeNetwork.edges.get(bridgeEdgeId);
+assert(bridgeEdge);
+const bridgeBuilder = new RoadMeshBuilder(terrain as never, materials as never, {
+  isWaterAt: (x) => Math.abs(x) <= 5.5,
+  getTerrainY: () => 0,
+  getWaterSurfaceY: () => 1.7,
+});
+const bridgeGroup = bridgeBuilder.buildEdge(bridgeEdge, bridgeNetwork);
+const bridgeCore = bridgeGroup.getObjectByName(`Road core ${bridgeEdge.id}`) as THREE.Mesh;
+assert(bridgeCore);
+assert.equal(bridgeCore.material, materials.bridgeRoad);
+assert.equal(
+  bridgeCore.geometry.getAttribute('bridgeUv').count,
+  bridgeCore.geometry.getAttribute('position').count,
+  'bridge deck UVs must belong to every compiled core vertex',
+);
+const bridgeBlend = bridgeCore.geometry.getAttribute('bridgeBlend');
+let maximumBridgeBlend = 0;
+for (let index = 0; index < bridgeBlend.count; index++) {
+  maximumBridgeBlend = Math.max(maximumBridgeBlend, bridgeBlend.getX(index));
+}
+assert(maximumBridgeBlend > 0.99);
+const approachHubs = bridgeGroup.getObjectByName(`Bridge approach road hubs ${bridgeEdge.id}`);
+assert.equal(approachHubs?.userData.bridgeApproachHubCount, 2);
+assert(bridgeGroup.getObjectByName('Bridge supports'));
+assert(bridgeGroup.getObjectByName('Bridge railings'));
 
 console.log('Road migration regressions passed.');
 

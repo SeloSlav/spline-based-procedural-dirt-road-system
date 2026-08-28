@@ -2,6 +2,10 @@
 import type { RoadEdge } from './RoadEdge.ts';
 import type { JunctionType, RoadNode } from './RoadNode.ts';
 import { RoadSpatialIndex } from './roadSpatialIndex.ts';
+import {
+  dryStoneWallSeed,
+  type DryStoneWallState,
+} from '../decorations/DryStoneWall.ts';
 
 export type SnapTarget =
   | { kind: 'node'; nodeId: string; point: THREE.Vector3; distance: number }
@@ -15,6 +19,7 @@ export type RoadIncident = {
 export type RoadNetworkSnapshot = {
   nextNodeId: number;
   nextEdgeId: number;
+  nextDryStoneWallId?: number;
   nodes: Array<{ id: string; position: [number, number, number] }>;
   edges: Array<{
     id: string;
@@ -33,6 +38,7 @@ export type RoadNetworkSnapshot = {
       deckY: number;
     }>;
   }>;
+  dryStoneWalls?: DryStoneWallState[];
 };
 
 type RouteEvent = {
@@ -47,8 +53,10 @@ const SPLIT_ENDPOINT_REUSE_DISTANCE = 1.25;
 export class RoadNetwork {
   readonly nodes = new Map<string, RoadNode>();
   readonly edges = new Map<string, RoadEdge>();
+  readonly dryStoneWalls = new Map<string, DryStoneWallState>();
   private nextNodeId = 1;
   private nextEdgeId = 1;
+  private nextDryStoneWallId = 1;
   private spatialIndex: RoadSpatialIndex | null = null;
   private spatialIndexDirty = true;
   private topologyRevision = 0;
@@ -190,10 +198,35 @@ export class RoadNetwork {
     return true;
   }
 
+  addDryStoneWallPath(rawPoints: THREE.Vector3[]): string | null {
+    const points = simplifyPath(rawPoints.map((point) => point.clone()), 0.42);
+    const length = routeLength(points);
+    if (points.length < 2 || length < 2.2) return null;
+    const numericId = this.nextDryStoneWallId++;
+    const id = `w${numericId}`;
+    this.dryStoneWalls.set(id, {
+      id,
+      seed: dryStoneWallSeed(numericId, points),
+      controlPoints: points.map(vectorToTuple),
+      sampledPath: points.map(vectorToTuple),
+      length,
+      revision: 1,
+    });
+    this.topologyRevision += 1;
+    return id;
+  }
+
+  deleteDryStoneWall(wallId: string): boolean {
+    const deleted = this.dryStoneWalls.delete(wallId);
+    if (deleted) this.topologyRevision += 1;
+    return deleted;
+  }
+
   snapshot(): RoadNetworkSnapshot {
     return {
       nextNodeId: this.nextNodeId,
       nextEdgeId: this.nextEdgeId,
+      nextDryStoneWallId: this.nextDryStoneWallId,
       nodes: [...this.nodes.values()].map((node) => ({
         id: node.id,
         position: [node.position.x, node.position.y, node.position.z],
@@ -208,6 +241,11 @@ export class RoadNetwork {
         length: edge.length,
         revision: edge.revision,
         bridgeSpans: edge.materialData?.bridgeSpans,
+      })),
+      dryStoneWalls: [...this.dryStoneWalls.values()].map((wall) => ({
+        ...wall,
+        controlPoints: wall.controlPoints.map(cloneTuple),
+        sampledPath: wall.sampledPath.map(cloneTuple),
       })),
     };
   }
@@ -228,9 +266,12 @@ export class RoadNetwork {
 
     this.nodes.clear();
     this.edges.clear();
+    this.dryStoneWalls.clear();
     this.invalidateSpatialIndex();
     this.nextNodeId = snapshot.nextNodeId;
     this.nextEdgeId = snapshot.nextEdgeId;
+    this.nextDryStoneWallId = snapshot.nextDryStoneWallId
+      ?? inferNextDryStoneWallId(snapshot.dryStoneWalls ?? []);
     for (const node of snapshot.nodes) {
       this.nodes.set(node.id, {
         id: node.id,
@@ -261,6 +302,14 @@ export class RoadNetwork {
       });
       this.nodes.get(edge.startNodeId)?.edgeIds.add(edge.id);
       this.nodes.get(edge.endNodeId)?.edgeIds.add(edge.id);
+    }
+    for (const wall of snapshot.dryStoneWalls ?? []) {
+      if (wall.sampledPath.length < 2 || wall.length < 2.2) continue;
+      this.dryStoneWalls.set(wall.id, {
+        ...wall,
+        controlPoints: wall.controlPoints.map(cloneTuple),
+        sampledPath: wall.sampledPath.map(cloneTuple),
+      });
     }
     this.classifyJunctions();
     this.invalidateSpatialIndex();
@@ -572,4 +621,17 @@ function vectorToTuple(vector: THREE.Vector3): [number, number, number] {
 
 function tupleToVector(tuple: [number, number, number]): THREE.Vector3 {
   return new THREE.Vector3(tuple[0], tuple[1], tuple[2]);
+}
+
+function cloneTuple(tuple: [number, number, number]): [number, number, number] {
+  return [tuple[0], tuple[1], tuple[2]];
+}
+
+function inferNextDryStoneWallId(walls: DryStoneWallState[]): number {
+  let nextId = 1;
+  for (const wall of walls) {
+    const numericId = Number.parseInt(wall.id.replace(/^w/, ''), 10);
+    if (Number.isFinite(numericId)) nextId = Math.max(nextId, numericId + 1);
+  }
+  return nextId;
 }
