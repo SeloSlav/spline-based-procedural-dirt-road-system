@@ -111,6 +111,8 @@ assert.match(terrainMaterialSource, /packedForestLitterUv/);
 assert.match(terrainMaterialSource, /attribute\('forestBlend', 'float'\)/);
 assert.match(terrainMaterialSource, /forestSurfaceBlend/);
 assert.match(terrainMaterialSource, /forestHrao\.r/);
+const fixedMapSource = readFileSync('src/terrain/FixedMap.ts', 'utf8');
+assert.match(fixedMapSource, /setAttribute\('forestBlend'/);
 const textureLoaderSource = readFileSync('src/roads/RoadTextureLoader.ts', 'utf8');
 assert.match(textureLoaderSource, /gorski_meadow_grass_v1/);
 assert.match(textureLoaderSource, /snow_leaf_albedo_atlas\.png/);

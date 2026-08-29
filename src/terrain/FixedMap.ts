@@ -69,9 +69,9 @@ export class FixedMap {
     const position = geometry.getAttribute('position');
     const uv = geometry.getAttribute('uv');
     const colors = new Float32Array(position.count * 3);
-    const shoreBlends = new Float32Array(position.count);
-    const roadWearBlends = new Float32Array(position.count);
-    const quarryPadBlends = new Float32Array(position.count);
+    // Four static scalar masks share one vertex buffer to stay below WebGPU's
+    // portable eight-buffer limit after adding the forest-floor identity.
+    const staticMasks = new Float32Array(position.count * 4);
     const dirtZoomGates = new Float32Array(position.count);
 
     for (let index = 0; index < position.count; index++) {
@@ -86,17 +86,22 @@ export class FixedMap {
       colors[index * 3 + 2] = weights[2];
       const terrainUv = sampleTerrainUv(x, z);
       uv.setXY(index, terrainUv[0], terrainUv[1]);
-      shoreBlends[index] = riverField?.sampleMudBlendAt(x, z) ?? 0;
+      staticMasks[index * 4] = riverField?.sampleMudBlendAt(x, z) ?? 0;
     }
 
     position.needsUpdate = true;
     uv.needsUpdate = true;
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.setAttribute('uv1', uv.clone());
-    geometry.setAttribute('shoreBlend', new THREE.BufferAttribute(shoreBlends, 1));
-    geometry.setAttribute('roadWearBlend', new THREE.BufferAttribute(roadWearBlends, 1));
-    geometry.setAttribute('quarryPadBlend', new THREE.BufferAttribute(quarryPadBlends, 1));
+    const staticMaskBuffer = new THREE.InterleavedBuffer(staticMasks, 4);
+    geometry.setAttribute('shoreBlend', new THREE.InterleavedBufferAttribute(staticMaskBuffer, 1, 0));
+    geometry.setAttribute('roadWearBlend', new THREE.InterleavedBufferAttribute(staticMaskBuffer, 1, 1));
+    geometry.setAttribute('quarryPadBlend', new THREE.InterleavedBufferAttribute(staticMaskBuffer, 1, 2));
     geometry.setAttribute('dirtZoomGate', new THREE.BufferAttribute(dirtZoomGates, 1));
+    // The litter shader can compile before async forest placement finishes.
+    // Install the contract up front; ForestGroundLayer replaces these zeros
+    // with the deterministic forest-density field before revealing detail.
+    geometry.setAttribute('forestBlend', new THREE.InterleavedBufferAttribute(staticMaskBuffer, 1, 3));
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
 

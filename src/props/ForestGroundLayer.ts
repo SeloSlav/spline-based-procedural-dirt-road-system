@@ -73,22 +73,25 @@ export function installTerrainForestBlendAttribute(
   terrain: Terrain,
   forestCores: readonly ForestCore[],
   spawnConfig: Pick<ForestSpawnConfig, 'extent' | 'terrainExtent'>,
-): THREE.BufferAttribute {
+): THREE.BufferAttribute | THREE.InterleavedBufferAttribute {
   const geometry = terrain.mesh.geometry;
   const position = geometry.getAttribute('position');
-  const values = new Float32Array(position.count);
+  let attribute = geometry.getAttribute('forestBlend');
+  if (!attribute || attribute.count !== position.count) {
+    attribute = new THREE.BufferAttribute(new Float32Array(position.count), 1);
+    attribute.setUsage(THREE.StaticDrawUsage);
+    geometry.setAttribute('forestBlend', attribute);
+  }
   for (let index = 0; index < position.count; index++) {
-    values[index] = forestDensityAt(
+    attribute.setX(index, forestDensityAt(
       position.getX(index),
       position.getZ(index),
       forestCores as ForestCore[],
       spawnConfig.extent,
       spawnConfig.terrainExtent,
-    );
+    ));
   }
-  const attribute = new THREE.BufferAttribute(values, 1);
-  attribute.setUsage(THREE.StaticDrawUsage);
-  geometry.setAttribute('forestBlend', attribute);
+  attribute.needsUpdate = true;
   geometry.userData.forestBlendSeeded = true;
   return attribute;
 }
