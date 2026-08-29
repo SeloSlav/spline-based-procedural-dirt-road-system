@@ -47,6 +47,8 @@ export type ForestGroundBlocker = (x: number, z: number) => boolean;
 
 export type ForestGroundLayerStats = {
   forestMaskVertices: number;
+  closeDetailVisible: boolean;
+  cameraDistance: number;
   undergrowth: UndergrowthInstances['stats'];
   ivy: ForestFloorIvyInstances['stats'];
   nettles: ForestFloorNettleInstances['stats'];
@@ -196,22 +198,27 @@ export async function createForestGroundLayer(
     nettles.commit();
     twigs.commit();
   };
+  const stats: ForestGroundLayerStats = {
+    forestMaskVertices: forestMask.count,
+    closeDetailVisible: false,
+    cameraDistance: Number.POSITIVE_INFINITY,
+    undergrowth: undergrowth.stats,
+    ivy: ivy.stats,
+    nettles: nettles.stats,
+    twigs: twigs.stats,
+  };
 
   return {
     group,
-    stats: {
-      forestMaskVertices: forestMask.count,
-      undergrowth: undergrowth.stats,
-      ivy: ivy.stats,
-      nettles: nettles.stats,
-      twigs: twigs.stats,
-    },
+    stats,
     updateCamera(cameraPosition, cameraDistance, firstPersonActive): boolean {
       const visible = shouldShowForestGroundDetail(
         closeDetailVisible,
         cameraDistance,
         firstPersonActive,
       );
+      stats.cameraDistance = cameraDistance;
+      stats.closeDetailVisible = visible;
       let changed = ivy.updateCamera(cameraPosition, visible);
       changed = nettles.updateCamera(cameraPosition, visible) || changed;
       if (visible !== closeDetailVisible) {

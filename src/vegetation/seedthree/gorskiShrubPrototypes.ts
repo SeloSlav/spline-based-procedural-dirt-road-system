@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { generateDichotomous } from './referenceDichotomous.js';
-import { buildFoliage } from '../../../vendor/seedthree/src/core/leaf-cards.js';
-import { Rng } from '../../../vendor/seedthree/src/core/rng.js';
+import { buildFoliage } from '@seedthree/core/leaf-cards.js';
+import { Rng } from '@seedthree/core/rng.js';
 import {
   bilberry,
   commonHornbeamHedge,
