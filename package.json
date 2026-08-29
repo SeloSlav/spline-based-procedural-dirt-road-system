@@ -7,10 +7,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "npm run test:roads && npm run test:walls && npm run test:grass",
+    "test": "npm run test:roads && npm run test:walls && npm run test:grass && npm run test:forest-ground",
     "test:roads": "node --experimental-strip-types scripts/testRoadMigration.mts",
     "test:walls": "node --experimental-strip-types scripts/testDryStoneWalls.mts",
-    "test:grass": "node --experimental-strip-types scripts/testGrassVegetationParity.mts"
+    "test:grass": "node --experimental-strip-types scripts/testGrassVegetationParity.mts",
+    "test:forest-ground": "node --experimental-strip-types scripts/testForestGroundVegetationParity.mts"
   },
   "dependencies": {
     "lil-gui": "^0.21.0",

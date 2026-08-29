@@ -9,6 +9,10 @@ import { DryStoneWallRenderer } from './decorations/DryStoneWallRenderer.ts';
 import { createGrassBladeField, type GrassBladeField } from './grass/GrassBladeField.ts';
 import { updateTerrainZoomBlend } from './grass/GrassLodConfig.ts';
 import { computeForestTreePlacements, type ForestTreePlacement } from './props/forestPlacements.ts';
+import {
+  createForestGroundLayer,
+  type ForestGroundLayer,
+} from './props/ForestGroundLayer.ts';
 import { RoadEditor, type RoadEditorState } from './roads/RoadEditor.ts';
 import type { RoadEdge } from './roads/RoadEdge.ts';
 import { RoadMaterialFactory } from './roads/RoadMaterialFactory.ts';
@@ -32,7 +36,7 @@ import { setWorldAnimationTime } from './scene/worldAnimationTime.ts';
 import { FixedMap, PLAYABLE_SIZE, TERRAIN_SIZE, WORLD_SEED } from './terrain/FixedMap.ts';
 import type { Terrain } from './terrain/Terrain.ts';
 import { distancePointToPolylineXZ } from './utils/pathGeometry.ts';
-import { isPointInPolygon2 } from './utils/polygonGeometry.ts';
+import { distancePointToPolygon2, isPointInPolygon2 } from './utils/polygonGeometry.ts';
 import { loadMossyRockTextures } from './utils/propTextureLoad.ts';
 import {
   createSeedThreeForest,
@@ -77,6 +81,7 @@ class RoadNetworkEditorApp {
   private forest: SeedThreeForestInstances | null = null;
   private forestController: SeedThreeForestController | null = null;
   private forestPlacements: ForestTreePlacement[] = [];
+  private forestGround: ForestGroundLayer | null = null;
   private grass: GrassBladeField | null = null;
   private readonly frameSamples: number[] = [];
   private readonly cpuSamples: number[] = [];
@@ -153,7 +158,9 @@ class RoadNetworkEditorApp {
     );
     this.terrainSurface = {
       playableSize: PLAYABLE_SIZE,
+      generationSize: PLAYABLE_SIZE,
       size: TERRAIN_SIZE,
+      resolution: 257,
       mesh: terrain,
       getHeightAt: (x, z) => this.map.getHeightAt(x, z),
       getPointAt: (x, z, offset = 0) => this.map.getPointAt(x, z, offset),
@@ -296,7 +303,7 @@ class RoadNetworkEditorApp {
         (x, z) => this.riverField.isBlockedForProps(x, z),
         { treeSeed: TREE_SEED, densityScale: 1 },
       );
-      const [forest, grass, reeds, rockTextures] = await Promise.all([
+      const [forest, grass, reeds, rockTextures, forestGround] = await Promise.all([
         createSeedThreeForest(
           this.forestPlacements,
           this.terrainSurface,
@@ -318,12 +325,21 @@ class RoadNetworkEditorApp {
           this.rendererBackend.kind,
         ),
         loadMossyRockTextures(this.rendererBackend.maxAnisotropy),
+        createForestGroundLayer(
+          this.forestPlacements,
+          this.terrainSurface,
+          this.rendererBackend.maxAnisotropy,
+          this.rendererBackend.kind,
+          TREE_SEED,
+          (x, z) => this.riverField.isBlockedForProps(x, z),
+        ),
       ]);
       this.forest = forest;
       this.forestController = createSeedThreeForestController(forest);
       this.forestController.setShadows(true);
       this.grass = grass;
       this.riverReeds = reeds;
+      this.forestGround = forestGround;
       const rockMaterial = createRiverRockMaterial(rockTextures);
       const shoreStones = createRiverShoreStones(
         this.terrainSurface,
@@ -333,7 +349,7 @@ class RoadNetworkEditorApp {
         mulberry32(0x71ee1212),
       );
       this.riverGroup.add(reeds.group, shoreStones.group);
-      this.scene.add(forest.group, grass.group);
+      this.scene.add(forest.group, grass.group, forestGround.group);
       this.syncSourceEnvironmentRoadClearance();
       this.requestShadowRefresh();
       document.documentElement.dataset.environmentReady = 'true';
@@ -352,11 +368,17 @@ class RoadNetworkEditorApp {
         const insideResidenceFrontage = residencePolygons.some((polygon) => (
           isPointInPolygon2({ x: placement.x, z: placement.z }, polygon)
         ));
-        if (insideResidenceFrontage || this.isTreeNearAnyEdge(placement, edges)) this.forestController.hideTree(index);
-        else this.forestController.showTree(index);
+        const active = !insideResidenceFrontage && !this.isTreeNearAnyEdge(placement, edges);
+        if (active) this.forestController.showTree(index);
+        else this.forestController.hideTree(index);
+        this.forestGround?.setTreeActive(index, active);
       }
       this.forestController.commit();
+      this.forestGround?.commit();
     }
+    this.forestGround?.syncBlockedMask((x, z) => (
+      this.isForestGroundPointBlocked(x, z, edges, residencePolygons)
+    ));
     this.grass?.syncRoadClearance(this.network);
     this.grass?.syncPlacementClearance(residencePolygons);
     this.requestShadowRefresh();
@@ -370,6 +392,26 @@ class RoadNetworkEditorApp {
       if (distance <= treeClearRadius(placement, edge.width)) return true;
     }
     return false;
+  }
+
+  private isForestGroundPointBlocked(
+    x: number,
+    z: number,
+    edges: RoadEdge[],
+    residencePolygons: Array<Array<{ x: number; z: number }>>,
+  ): boolean {
+    if (this.riverField.isBlockedForProps(x, z)) return true;
+    const clearance = 0.95;
+    for (const edge of edges) {
+      const path = edge.sampledPath.length >= 2 ? edge.sampledPath : edge.controlPoints;
+      if (path.length < 2) continue;
+      if (distancePointToPolylineXZ(x, z, path) <= edge.width * 0.5 + clearance) {
+        return true;
+      }
+    }
+    return residencePolygons.some((polygon) => (
+      distancePointToPolygon2({ x, z }, polygon) <= clearance
+    ));
   }
 
   private requestShadowRefresh(): void {
@@ -624,6 +666,9 @@ class RoadNetworkEditorApp {
     ) this.requestShadowRefresh();
     this.grass?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
     this.riverReeds?.updateCameraState(this.camera.position, this.cameraTarget, cameraDistance, false);
+    if (this.forestGround?.updateCamera(this.camera.position, cameraDistance, false)) {
+      this.requestShadowRefresh();
+    }
     const zoomPercent = Math.round(this.cameraController.getZoomPercent());
     if (zoomPercent !== this.lastZoomPercent) {
       this.lastZoomPercent = zoomPercent;
@@ -701,6 +746,11 @@ class RoadNetworkEditorApp {
         viewTriangles,
         shadowTriangles,
       });
+    }
+    if (this.forestGround) {
+      document.documentElement.dataset.forestGroundStats = JSON.stringify(
+        this.forestGround.stats,
+      );
     }
     if (this.grass) {
       let draws = 0;

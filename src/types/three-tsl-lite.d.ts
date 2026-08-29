@@ -4,16 +4,20 @@ declare module 'three/tsl' {
   export const abs: (value: unknown) => unknown;
   export const cameraPosition: unknown;
   export const cameraViewMatrix: unknown;
+  export const cos: (value: unknown) => unknown;
   export const dot: (a: unknown, b: unknown) => unknown;
   export const exp: (value: unknown) => unknown;
   export const floor: (value: unknown) => unknown;
   export const fract: (value: unknown) => unknown;
   export const modelWorldMatrix: unknown;
+  export const normalLocal: unknown;
   export const positionLocal: unknown;
   export const positionGeometry: unknown;
   export const sin: (value: unknown) => unknown;
   export const time: unknown;
   export const normalView: unknown;
+  export const normalWorldGeometry: unknown;
+  export const transformNormalToView: (value: unknown) => unknown;
   export const normalize: (value: unknown) => unknown;
   export const positionWorld: unknown;
   export const screenSize: unknown;
@@ -44,6 +48,7 @@ declare module 'three/tsl' {
   export function float(value: number): unknown;
   export function max(a: unknown, b: unknown): unknown;
   export function mix(a: unknown, b: unknown, t: unknown): unknown;
+  export function smoothstep(edge0: unknown, edge1: unknown, value: unknown): unknown;
   export function vec2(x: unknown, y?: unknown): unknown;
   export function vec3(x: unknown, y?: unknown, z?: unknown): unknown;
   export function vec4(x: unknown, y?: unknown, z?: unknown, w?: unknown): unknown;

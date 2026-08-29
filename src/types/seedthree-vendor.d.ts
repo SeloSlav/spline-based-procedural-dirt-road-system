@@ -25,6 +25,14 @@ declare module '@seedthree/core/leaf-cards.js' {
     tintNode: unknown;
     tintAmount: unknown;
   };
+
+  export function buildFoliage(
+    stems: unknown[],
+    foliage: Record<string, unknown>,
+    rng: unknown,
+    material: THREE.Material,
+    centerUniform?: { value: THREE.Vector3 } | null,
+  ): THREE.InstancedMesh | null;
 }
 
 declare module '@seedthree/core/branch-cards.js' {
@@ -255,6 +263,20 @@ declare module '@seedthree/core/forest-edge-band.js' {
     items: Item[];
     assignments: ForestEdgeBandAssignment[];
     stats: ForestEdgeBandStats;
+  };
+
+}
+
+declare module '@seedthree/core/dichotomous.js' {
+  import type * as THREE from 'three';
+
+  export function generateDichotomous(
+    params: Record<string, unknown>,
+    rng: unknown,
+  ): {
+    stems: unknown[];
+    terminalStems: unknown[];
+    geometry: THREE.BufferGeometry;
   };
 }
 
@@ -559,6 +581,7 @@ declare module '@seedthree/core/rng.js' {
     constructor(seed: string | number);
     next(): number;
     range(min: number, max: number): number;
+    vary(base: number, spread: number): number;
   }
 }
 
