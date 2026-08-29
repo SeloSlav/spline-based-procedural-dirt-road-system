@@ -18,6 +18,10 @@ export type TerrainBlendTextureSet = {
   dry: TextureSet;
 };
 
+type TerrainBlendTextureUrls = Partial<
+  Record<'albedo' | 'normal' | 'roughness' | 'ao' | 'height', string>
+>;
+
 export class RoadTextureLoader {
   private readonly maxAnisotropy: number;
 
@@ -67,23 +71,29 @@ export class RoadTextureLoader {
 
   async loadTerrainBlendTextures(): Promise<TerrainBlendTextureSet> {
     const [meadow, dense, dry] = await Promise.all([
-      this.loadTerrainBlendSet(publicAssetUrl('assets/textures/terrain/manor_grass_meadow')),
-      this.loadTerrainBlendSet(publicAssetUrl('assets/textures/terrain/manor_grass_dense')),
+      this.loadTerrainBlendSet(publicAssetUrl('assets/textures/terrain/gorski_meadow_grass_v1')),
+      this.loadTerrainBlendSet(publicAssetUrl('assets/textures/terrain/gorski_dense_grass_v1')),
       this.loadTerrainBlendSet(
-        publicAssetUrl('assets/textures/terrain/manor_grass_dry'),
-        publicAssetUrl('assets/textures/terrain/manor_grass_dry/snow_albedo_atlas.png'),
+        publicAssetUrl('assets/textures/terrain/gorski_dry_grass_v1'),
+        {
+          albedo: publicAssetUrl('assets/textures/terrain/gorski_dry_grass_v1/snow_leaf_albedo_atlas.png'),
+          roughness: publicAssetUrl('assets/textures/terrain/gorski_dry_grass_v1/snow_leaf_hrao_atlas.png'),
+        },
       ),
     ]);
     return { meadow, dense, dry };
   }
 
-  private async loadTerrainBlendSet(base: string, albedoUrl = `${base}/albedo.png`): Promise<TextureSet> {
+  private async loadTerrainBlendSet(
+    base: string,
+    urls: TerrainBlendTextureUrls = {},
+  ): Promise<TextureSet> {
     const [albedo, normal, roughness, ao, height] = await Promise.all([
-      this.load(albedoUrl, true, THREE.MirroredRepeatWrapping),
-      this.load(`${base}/normal.png`, false, THREE.MirroredRepeatWrapping),
-      this.load(`${base}/roughness.png`, false, THREE.MirroredRepeatWrapping),
-      this.load(`${base}/ao.png`, false, THREE.MirroredRepeatWrapping),
-      this.load(`${base}/height.png`, false, THREE.MirroredRepeatWrapping),
+      this.load(urls.albedo ?? `${base}/albedo.png`, true, THREE.MirroredRepeatWrapping),
+      this.load(urls.normal ?? `${base}/normal.png`, false, THREE.MirroredRepeatWrapping),
+      this.load(urls.roughness ?? `${base}/roughness.png`, false, THREE.MirroredRepeatWrapping),
+      this.load(urls.ao ?? `${base}/ao.png`, false, THREE.MirroredRepeatWrapping),
+      this.load(urls.height ?? `${base}/height.png`, false, THREE.MirroredRepeatWrapping),
     ]);
     return { albedo, normal, roughness, ao, height };
   }

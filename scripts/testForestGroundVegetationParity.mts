@@ -29,7 +29,7 @@ import { stingingNettle } from '../src/vegetation/seedthree/stingingNettlePreset
 const TREE_SEED = 0x5eedf0a5;
 const TERRAIN_SIZE = 408.5;
 const EXPECTED_ASSET_FINGERPRINT =
-  'd11d807d2833de2fb40268ed6283baed72ac6bdeeb48e824ba18d0b00018578d';
+  'ce4ac58e551b0dace5ff39c2c739f11dc1673f352f1234482ae8a21fcfd74ae4';
 
 assert.equal(FOREST_GROUND_SHOW_DISTANCE, 44);
 assert.equal(FOREST_GROUND_HIDE_DISTANCE, 52);
@@ -106,11 +106,25 @@ const generatorSource = readFileSync(
 );
 assert.match(generatorSource, /terminalTaperStart/);
 assert.match(generatorSource, /terminalTipRadiusScale/);
+const terrainMaterialSource = readFileSync('src/terrain/TerrainGrassMaterial.ts', 'utf8');
+assert.match(terrainMaterialSource, /packedForestLitterUv/);
+assert.match(terrainMaterialSource, /attribute\('forestBlend', 'float'\)/);
+assert.match(terrainMaterialSource, /forestSurfaceBlend/);
+assert.match(terrainMaterialSource, /forestHrao\.r/);
+const textureLoaderSource = readFileSync('src/roads/RoadTextureLoader.ts', 'utf8');
+assert.match(textureLoaderSource, /gorski_meadow_grass_v1/);
+assert.match(textureLoaderSource, /snow_leaf_albedo_atlas\.png/);
+assert.match(textureLoaderSource, /snow_leaf_hrao_atlas\.png/);
 
 const assetRoots = [
   'src/assets/vegetation/common-dogwood',
   'src/assets/vegetation/stinging-nettle',
   'src/assets/vegetation/shrubs',
+  'public/assets/textures/terrain/gorski_meadow_grass_v1',
+  'public/assets/textures/terrain/gorski_dense_grass_v1',
+  'public/assets/textures/terrain/gorski_dry_grass_v1',
+  'public/assets/textures/terrain/gorski_forest_litter_primary_v1',
+  'public/assets/textures/terrain/gorski_forest_litter_secondary_v1',
 ];
 const assetFiles: string[] = [];
 const collectFiles = (directory: string): void => {
@@ -123,7 +137,7 @@ const collectFiles = (directory: string): void => {
 assetRoots.forEach(collectFiles);
 assetFiles.push('public/assets/textures/vegetation/forest-floor-ivy-leaf-atlas-v2.png');
 assetFiles.sort();
-assert.equal(assetFiles.length, 40);
+assert.equal(assetFiles.length, 82);
 const assetEntries = assetFiles.map((file) => {
   const hash = createHash('sha256').update(readFileSync(file)).digest('hex');
   return `${file.replaceAll('\\', '/')}:${hash}`;
