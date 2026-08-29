@@ -1,12 +1,12 @@
 /** Matches CameraController default orbit distance at 100% zoom. */
 export const BASELINE_CAMERA_DISTANCE = 88;
 
-/** SeedThree grass, wildflowers, and reeds reach full strength here. */
+/** SeedThree grass, wildflowers, and cattails reach full strength here. */
 export const CLOSE_GROUND_FULL_ZOOM_PERCENT = 400;
 
 /**
  * Close vegetation starts fading in above 200% and reaches full strength at
- * 400%. Grass, wildflowers, and cattails all consume this same gate.
+ * 400%. Grass, wildflowers, and cattails consume this shared gate.
  */
 export const CLOSE_GROUND_FADE_START_ZOOM_PERCENT = 200;
 
@@ -19,16 +19,13 @@ export const MAP_ICON_FADE_START_ZOOM_PERCENT = 45;
 /** Brown soil is fully active only at a much closer, ground-level zoom. */
 export const DIRT_REVEAL_ZOOM_PERCENT = 650;
 
-/**
- * Brown soil begins shortly after SeedThree groundcover reaches full opacity.
- * This keeps the meadow intact until the authored grass is visually complete.
- */
-export const DIRT_FADE_START_ZOOM_PERCENT = 425;
+/** Brown soil starts its gradual handoff alongside close ground vegetation. */
+export const DIRT_FADE_START_ZOOM_PERCENT = CLOSE_GROUND_FADE_START_ZOOM_PERCENT;
 
 /** Pow easing on the zoom gate (< 1 = detail ramps in gradually across the fade band). */
 export const DIRT_BLEND_EASE = 0.72;
 
-/** Orbit distances matching the 425% / 650% brown-soil zoom band. */
+/** Orbit distances matching the 200% / 650% brown-soil zoom band. */
 export const TERRAIN_DIRT_CLOSE_DISTANCE =
   BASELINE_CAMERA_DISTANCE / (DIRT_REVEAL_ZOOM_PERCENT / 100);
 
@@ -51,7 +48,7 @@ export const DIRT_PROXIMITY_INNER_SQ = DIRT_PROXIMITY_INNER * DIRT_PROXIMITY_INN
 
 export const DIRT_PROXIMITY_OUTER_SQ = DIRT_PROXIMITY_OUTER * DIRT_PROXIMITY_OUTER;
 
-/** SeedThree grass, wildflowers, and cattails share the close-ground zoom band. */
+/** SeedThree grass, wildflowers, and cattails share this zoom band. */
 export const GRASS_BLADE_REVEAL = {
   close: CLOSE_GROUND_FULL_DISTANCE,
   far: CLOSE_GROUND_FADE_START_DISTANCE,
@@ -66,11 +63,55 @@ export const GRASS_BLADE_NEAR_RADIUS_FIRST_PERSON = 46;
 /** Spatial chunk size for streamed grass batches (larger = fewer pan hitches). */
 export const GRASS_BLADE_CHUNK_SIZE = 8;
 
-/** Target tufts scattered per chunk (organic placement, not a rigid grid). */
-export const GRASS_TUFTS_PER_CHUNK = 96;
+/**
+ * Target full-size tufts scattered per chunk. Together with the 70% micro
+ * underfill in GrassBladeField this resolves to roughly 2.35x the former
+ * close-meadow population without changing the streamed radius.
+ */
+export const GRASS_TUFTS_PER_CHUNK = 192;
+
+/** Dense woodland is ivy, shrubs and litter; meadow blade cards stop entirely. */
+export const FOREST_GRASS_RENDER_DENSITY_MULTIPLIER = 0;
+
+/** Local rejection keeps edge-chunk tufts on grass instead of leaf litter. */
+export const FOREST_GRASS_PLACEMENT_CHANCE = 0;
+export const FOREST_WILDFLOWER_PLACEMENT_CHANCE = 0;
+
+export function grassTuftTargetForForestBlend(
+  baseTarget: number,
+  forestBlend: number,
+): number {
+  const blend = Math.max(0, Math.min(1, forestBlend));
+  const densityMultiplier = 1 + (
+    FOREST_GRASS_RENDER_DENSITY_MULTIPLIER - 1
+  ) * blend;
+  return Math.max(0, Math.round(baseTarget * densityMultiplier));
+}
+
+export function grassMicroTuftTargetForForestBlend(
+  tuftTarget: number,
+  forestBlend: number,
+): number {
+  const blend = Math.max(0, Math.min(1, forestBlend));
+  return Math.floor(tuftTarget * 0.7 * (1 - blend));
+}
+
+export function grassPlacementChanceForForestBlend(forestBlend: number): number {
+  const blend = Math.max(0, Math.min(1, forestBlend));
+  const shelter = smoothstep(0.08, 0.82, blend);
+  return 1 + (FOREST_GRASS_PLACEMENT_CHANCE - 1) * shelter;
+}
+
+export function wildflowerPlacementChanceForForestBlend(
+  forestBlend: number,
+): number {
+  const blend = Math.max(0, Math.min(1, forestBlend));
+  const shelter = smoothstep(0.08, 0.82, blend);
+  return 0.86 + (FOREST_WILDFLOWER_PLACEMENT_CHANCE - 0.86) * shelter;
+}
 
 /** Extra scatter attempts budget per chunk. */
-export const GRASS_TUFT_SCATTER_ATTEMPTS = GRASS_TUFTS_PER_CHUNK + 56;
+export const GRASS_TUFT_SCATTER_ATTEMPTS = Math.ceil(GRASS_TUFTS_PER_CHUNK * 1.8);
 
 /** Blade stalks in each tuft mesh (shared geometry). */
 export const GRASS_BLADES_PER_TUFT = 9;
@@ -86,13 +127,13 @@ export function grassStreamNearRadius(firstPersonActive: boolean): number {
 /** Soft falloff band at the outer edge of the grass patch (world units). */
 export const GRASS_EDGE_FADE_BAND = 24;
 
-/** Brown-soil transition: 0 at 425% zoom, 1 at 650%. */
+/** Brown-soil transition: 0 at 200% zoom, 1 at 650%. */
 export function dirtZoomGate(cameraDistance: number): number {
   const t = smoothstep(TERRAIN_DIRT_CLOSE_DISTANCE, TERRAIN_DIRT_FAR_DISTANCE, cameraDistance);
   return Math.pow(1 - t, DIRT_BLEND_EASE);
 }
 
-/** SeedThree vegetation transition: 0 at 200% zoom, 1 at 400%. */
+/** Close-ground vegetation transition: 0 at 200% zoom, 1 at 400%. */
 export function closeGroundVegetationGate(cameraDistance: number): number {
   const t = smoothstep(
     CLOSE_GROUND_FULL_DISTANCE,
@@ -101,14 +142,6 @@ export function closeGroundVegetationGate(cameraDistance: number): number {
   );
   return Math.pow(1 - t, DIRT_BLEND_EASE);
 }
-
-/**
- * Cattails enter with the other close vegetation immediately above 200%.
- * Their steeper opacity curve keeps the alpha-tested cards subtle at the
- * beginning of the shared transition.
- */
-export const REED_LOD_VISIBILITY_THRESHOLD = 0;
-export const REED_LOD_OPACITY_POWER = 2;
 
 /**
  * SeedThree grass blades use the wider close-vegetation transition. The eased
@@ -142,8 +175,9 @@ export function grassBladeLodOpacity(grassLod: number): number {
   return Math.pow(remapped, GRASS_BLADE_LOD_OPACITY_POWER);
 }
 
+/** Cattail cards use the exact same reveal curve as ground grass blades. */
 export function reedRevealOpacity(cameraDistance: number): number {
-  return closeGroundVegetationGate(cameraDistance);
+  return grassBladeLodOpacity(grassBladeRevealOpacity(cameraDistance));
 }
 
 export function resolveReedLod(cameraDistance: number, firstPersonActive: boolean): number {
@@ -152,12 +186,11 @@ export function resolveReedLod(cameraDistance: number, firstPersonActive: boolea
 }
 
 export function reedLodOpacity(reedLod: number): number {
-  const clampedLod = Math.max(0, Math.min(1, reedLod));
-  return Math.pow(clampedLod, REED_LOD_OPACITY_POWER);
+  return Math.max(0, Math.min(1, reedLod));
 }
 
 export function isReedLodVisible(reedLod: number): boolean {
-  return reedLod > REED_LOD_VISIBILITY_THRESHOLD;
+  return reedLod > 0;
 }
 
 /** First-person mode always uses full close grass/dirt LOD around the player. */
